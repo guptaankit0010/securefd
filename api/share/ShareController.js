@@ -12,7 +12,10 @@ async function create(req, res) {
   const body = await readJsonBody(req);
   validate(body, SCHEMAS.shareCreate);
   const { token } = await ShareService.createShareToken(req.params.fileId, req.user.uid, body.expiresInSeconds);
-  sendJson(res, 201, { token });
+  sendJson(res, 201, {
+    token,
+    shareUrl: `${env.serverBaseUrl}/api/share/${token}`,
+  });
 }
 
 async function revoke(req, res) {

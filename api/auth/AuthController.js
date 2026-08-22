@@ -4,12 +4,14 @@ const { readJsonBody, sendJson, serializeCookie } = require('../../lib/http');
 const { sanitizeBody } = require('../../lib/validation/sanitize');
 const { validate, SCHEMAS } = require('../../lib/validation/schemas');
 const { AppError } = require('../../middleware/errorHandler');
-const AuthService = require('./AuthService');
+const AuthService  = require('./AuthService');
+const logger       = require('../../lib/logger');
 
 async function signupHandler(req, res) {
   const body = sanitizeBody(await readJsonBody(req), SCHEMAS.signup);
   validate(body, SCHEMAS.signup);
   const user = await AuthService.signup(body);
+  logger.info('signup request completed', { username: body.username });
   sendJson(res, 201, { user });
 }
 
@@ -57,6 +59,7 @@ async function logoutHandler(req, res) {
   res.setHeader('Set-Cookie', serializeCookie('__Host-session', '', {
     httpOnly: true, secure: true, sameSite: 'Strict', path: '/', maxAge: 0,
   }));
+  logger.info('logout request completed', { uid: req.user?.uid });
   sendJson(res, 200, { message: 'Logged out successfully' });
 }
 

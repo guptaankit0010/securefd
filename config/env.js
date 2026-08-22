@@ -12,4 +12,5 @@ module.exports = {
   storageDir:        process.env.STORAGE_DIR,
   maxFileSizeBytes:  Number(process.env.MAX_FILE_SIZE_BYTES),
   allowedOrigin:     process.env.ALLOWED_ORIGIN || 'https://localhost:3000',
+  serverBaseUrl:     process.env.SERVER_BASE_URL || `https://localhost:${Number(process.env.PORT) || 4433}`,
 };

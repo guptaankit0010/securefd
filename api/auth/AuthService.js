@@ -9,12 +9,14 @@ const { sessionSecret }                = require('../../config/env');
 const { validateUsername }             = require('../../lib/validation/sanitize');
 const { AppError }                     = require('../../middleware/errorHandler');
 const { COOKIE_TTL, ACCESS_TTL, REFRESH_TTL, MAX_SESSIONS, getScopesForRole } = require('../../config/auth');
+const logger                           = require('../../lib/logger');
 
 async function signup({ username, password, role = 'viewer' }) {
   if (!validateUsername(username)) throw new AppError('Invalid username format', 400);
   if (await UserModel.findOne({ username })) throw new AppError('Username taken', 409);
   const hashed = await hashPassword(password);
   const user   = await UserModel.create({ username, password: hashed, role });
+  logger.info('user signed up', { username: user.username, role: user.role, uid: user._id });
   return { id: user._id, username: user.username, role: user.role, scopes: getScopesForRole(user.role) };
 }
 
@@ -59,6 +61,7 @@ async function loginAll({ username, password }, deviceId = randomUUID()) {
     { upsert: true }
   );
 
+  logger.info('user logged in', { uid, role: user.role, deviceId });
   return {
     cookieToken, cookieMaxAge: COOKIE_TTL,
     accessToken, refreshToken, expiresIn: ACCESS_TTL,
@@ -79,17 +82,20 @@ async function refreshTokens(rawRefreshToken) {
   if (session.tokenHash !== incomingHash) {
     // Refresh token reuse detected — revoke all sessions for this user (breach response)
     await SessionModel.updateMany({ owner: payload.uid }, { isRevoked: true });
+    logger.warn('refresh token reuse detected — all sessions revoked', { uid: payload.uid, deviceId: payload.deviceId });
     throw new AppError('Compromised token detected. All sessions revoked.', 401);
   }
 
   const user = await UserModel.findById(payload.uid);
   if (!user || user.isDeleted) throw new AppError('User no longer exists', 401);
 
+  logger.info('tokens refreshed', { uid: payload.uid, deviceId: payload.deviceId });
   return issueTokenPair(user, session.deviceId);
 }
 
 async function revokeSession(userId, deviceId) {
   await SessionModel.updateOne({ owner: userId, deviceId }, { isRevoked: true });
+  logger.info('session revoked', { uid: userId, deviceId });
 }
 
 // Before writing a new session slot, check whether this device already has an active
@@ -108,6 +114,7 @@ async function enforceSessionLimit(userId, deviceId) {
   ).sort({ createdAt: 1 }); // oldest first
 
   if (active.length >= MAX_SESSIONS) {
+    logger.info('session limit reached, evicting oldest session', { uid: String(userId), evicting: String(active[0]._id) });
     await SessionModel.deleteOne({ _id: active[0]._id }); // evict oldest
   }
 }

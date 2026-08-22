@@ -8,7 +8,8 @@ const { AppError } = require('../../middleware/errorHandler');
 const { assertSafePath } = require('../../lib/validation/sanitize');
 const { validate, SCHEMAS } = require('../../lib/validation/schemas');
 const FileModel = require('./FileModel');
-const env = require('../../config/env');
+const env    = require('../../config/env');
+const logger = require('../../lib/logger');
 
 // expected magic bytes for each allowed mimeType — content must match what the client declares
 const MIME_SIGNATURES = {
@@ -148,6 +149,7 @@ async function uploadFile(req, ownerId) {
         if (!firstChunk) { bytesWritten += chunk.length; return; }
         firstChunk = false;
         if (!matchesDeclaredType(chunk, meta.mimeType)) {
+          logger.warn('file content does not match declared mimeType', { filename: meta.filename, mimeType: meta.mimeType });
           return failFile(new AppError('File content does not match declared mimeType', 415));
         }
         bytesWritten += chunk.length;
@@ -164,6 +166,7 @@ async function uploadFile(req, ownerId) {
             owner: ownerId, filename: meta.filename, storageName,
             mimeType: meta.mimeType, size: bytesWritten, iv, authTag: getAuthTag(),
           });
+          logger.info('file uploaded', { fileId: file._id, filename: file.filename, mimeType: file.mimeType, size: file.size, owner: ownerId });
           settledThisFile = true;
           results.push({ success: true, file });
           pendingWork--;
