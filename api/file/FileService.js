@@ -24,6 +24,10 @@ const FORBIDDEN_SIGS = [
   Buffer.from([0x7F,0x45,0x4C,0x46]),   // ELF
   Buffer.from([0x89,0x50,0x4E,0x47]),   // PNG
   Buffer.from('GIF8'),                   // GIF
+  // Buffer.from('%PDF'),
+  Buffer.from([0x50,0x4B,0x03,0x04]),   // ZIP (docx == zip container)
+  Buffer.from([0x52,0x61,0x72,0x21]),   // RAR
+  Buffer.from([0x1F,0x8B]),             // GZIP
 ];
 
 // verifies the sniffed first chunk actually matches the mimeType the client declared in `meta`,
@@ -65,14 +69,19 @@ async function uploadFile(req, ownerId) {
 
       const { stream: cipher, iv, getAuthTag } = createEncryptStream();
       const dest = fs.createWriteStream(storagePath);
-      const cleanup = () => { dest.destroy(); fs.unlink(storagePath, () => {}); };
+      const cleanup = () => {
+        fileStream.destroy();
+        cipher.destroy();
+        dest.destroy();
+        fs.unlink(storagePath, () => {});
+      };
 
       fileStream.on('data', chunk => {
         if (!firstChunk) { bytesWritten += chunk.length; return; }
         firstChunk = false;
         if (!matchesDeclaredType(chunk, meta.mimeType)) {
           fileStream.destroy(); cleanup();
-          return reject(new AppError('File content does not match declared mimeType', 415));
+          return reject(new AppError('File content does not match supported or declared mimeType', 415));
         }
         bytesWritten += chunk.length;
       });
@@ -92,6 +101,7 @@ async function uploadFile(req, ownerId) {
       });
 
       fileStream.on('error', err => { cleanup(); reject(err); });
+      cipher.on('error',     err => { cleanup(); reject(err); });
       dest.on('error',       err => { cleanup(); reject(err); });
     });
 
