@@ -1,8 +1,8 @@
 'use strict';
 
 // Token lifetimes in seconds
-const COOKIE_TTL  = 8 * 60 * 60;      // 8 hours   (cookie / legacy path)
-const ACCESS_TTL  = 15 * 60;          // 15 minutes (Bearer access token)
+const COOKIE_TTL = 8 * 60 * 60;      // 8 hours   (cookie / legacy path)
+const ACCESS_TTL = 15 * 60;          // 15 minutes (Bearer access token)
 const REFRESH_TTL = 7 * 24 * 60 * 60; // 7 days    (Bearer refresh token)
 
 // Role → scope mapping (ABAC)
@@ -11,8 +11,8 @@ const REFRESH_TTL = 7 * 24 * 60 * 60; // 7 days    (Bearer refresh token)
 // viewer  : read-only
 const ROLE_SCOPES = {
   manager: ['file:read', 'file:write', 'file:delete'],
-  admin:   ['file:read', 'file:write'],
-  viewer:  ['file:read'],
+  admin: ['file:read', 'file:write', 'file:delete'],
+  viewer: ['file:read'],
 };
 
 function getScopesForRole(role) {
