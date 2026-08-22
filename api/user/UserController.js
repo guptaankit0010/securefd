@@ -4,7 +4,9 @@ const { validate, SCHEMAS } = require('../../lib/validation/schemas');
 const UserService = require('./UserService');
 
 async function getMe(req, res) {
-  sendJson(res, 200, { user: req.user });
+  // Return only the identity fields — strip internal token claims (type, exp, deviceId)
+  const { uid, role, scopes } = req.user;
+  sendJson(res, 200, { user: { uid, role, scopes } });
 }
 
 async function updateRole(req, res) {

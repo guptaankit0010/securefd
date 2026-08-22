@@ -9,6 +9,7 @@ const { Router }              = require('./lib/router');
 const { centralErrorHandler } = require('./middleware/errorHandler');
 const { shutdown }            = require('./lib/shutdown');
 const { registerRoutes }      = require('./config/routes');
+const { handleCors }          = require('./lib/http');
 
 fs.mkdirSync(env.storageDir, { recursive: true });
 
@@ -18,6 +19,7 @@ router.init(); // compile regex for all registered routes
 
 const sslOptions = { key: fs.readFileSync('./cert/key.pem'), cert: fs.readFileSync('./cert/cert.pem') };
 const server = https.createServer(sslOptions, async (req, res) => {
+  if (handleCors(req, res, env.allowedOrigin)) return;
   await router.handle(req, res).catch(err => centralErrorHandler(err, req, res));
 });
 
@@ -25,5 +27,6 @@ mongoose.connect(env.mongoUri).then(() => {
   server.listen(env.port, 'localhost', () => console.log(`Server on https://localhost:${env.port}`));
 });
 
+// Keep signal handlers at module level — they must register even if DB never connects
 process.on('SIGTERM', () => shutdown(server));
 process.on('SIGINT',  () => shutdown(server));

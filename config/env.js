@@ -11,4 +11,5 @@ module.exports = {
   fileEncryptionKey: Buffer.from(process.env.FILE_ENCRYPTION_KEY, 'hex'),
   storageDir:        process.env.STORAGE_DIR,
   maxFileSizeBytes:  Number(process.env.MAX_FILE_SIZE_BYTES),
+  allowedOrigin:     process.env.ALLOWED_ORIGIN || 'https://localhost:3000',
 };
