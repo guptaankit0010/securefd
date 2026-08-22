@@ -10,16 +10,31 @@ const { validate, SCHEMAS } = require('../../lib/validation/schemas');
 const FileModel = require('./FileModel');
 const env = require('../../config/env');
 
-// reject files whose first bytes match known binary format signatures
-const BINARY_SIGS = [
+// expected magic bytes for each allowed mimeType — content must match what the client declares
+const MIME_SIGNATURES = {
+  'text/plain':       null, // no fixed signature; validated by absence of any known binary signature below
+  'application/json': null,
+  'application/pdf':                                                        [Buffer.from('%PDF')],
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': [Buffer.from([0x50,0x4B,0x03,0x04])], // docx == zip container
+};
+
+// always-forbidden signatures, regardless of declared mimeType — never valid for any allowed type here
+const FORBIDDEN_SIGS = [
   Buffer.from([0x4D,0x5A]),             // MZ  – PE (EXE/DLL)
   Buffer.from([0x7F,0x45,0x4C,0x46]),   // ELF
   Buffer.from([0x89,0x50,0x4E,0x47]),   // PNG
-  Buffer.from('%PDF'),                   // PDF
   Buffer.from('GIF8'),                   // GIF
-  Buffer.from([0x50,0x4B,0x03,0x04]),   // ZIP/docx/jar
 ];
-const isBinary = chunk => BINARY_SIGS.some(s => chunk.slice(0, s.length).equals(s));
+
+// verifies the sniffed first chunk actually matches the mimeType the client declared in `meta`,
+// so a client can't lie about mimeType to smuggle a different file type past validation
+function matchesDeclaredType(chunk, mimeType) {
+  if (FORBIDDEN_SIGS.some(s => chunk.slice(0, s.length).equals(s))) return false;
+
+  const expected = MIME_SIGNATURES[mimeType];
+  if (!expected) return true; // text/plain, application/json — no fixed signature to check beyond the forbidden list above
+  return expected.some(s => chunk.slice(0, s.length).equals(s));
+}
 
 async function uploadFile(req, ownerId) {
   return new Promise((resolve, reject) => {
@@ -35,7 +50,14 @@ async function uploadFile(req, ownerId) {
     });
 
     bb.on('file', (_field, fileStream) => {
-      if (!meta) return reject(new AppError('meta field must precede file field', 400));
+      if (!meta) {
+        // Must drain the stream even though we're rejecting it — busboy pauses its
+        // internal parser until this stream is consumed. Without this, the rest of
+        // the request body is never read, leaving the socket in a bad state and
+        // corrupting the next request on the same keep-alive connection.
+        fileStream.resume();
+        return reject(new AppError('meta field must precede file field', 400));
+      }
 
       const storageName = randomUUID();
       const storagePath = path.join(env.storageDir, storageName);
@@ -48,7 +70,10 @@ async function uploadFile(req, ownerId) {
       fileStream.on('data', chunk => {
         if (!firstChunk) { bytesWritten += chunk.length; return; }
         firstChunk = false;
-        if (isBinary(chunk)) { fileStream.destroy(); cleanup(); return reject(new AppError('File type not permitted', 415)); }
+        if (!matchesDeclaredType(chunk, meta.mimeType)) {
+          fileStream.destroy(); cleanup();
+          return reject(new AppError('File content does not match declared mimeType', 415));
+        }
         bytesWritten += chunk.length;
       });
 

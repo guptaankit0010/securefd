@@ -8,15 +8,15 @@ const { AppError } = require('../../middleware/errorHandler');
 
 const SESSION_TTL = 8 * 60 * 60; // 8 h in seconds
 
-async function signup(username, password) {
+async function signup({ username, password, role = 'viewer' }) {
   if (!validateUsername(username)) throw new AppError('Invalid username format', 400);
   if (await UserModel.findOne({ username })) throw new AppError('Username taken', 409);
   const hashed = await hashPassword(password);
-  const user = await UserModel.create({ username, password: hashed });
+  const user = await UserModel.create({ username, password: hashed, role });
   return { id: user._id, username: user.username, role: user.role };
 }
 
-async function login(username, password) {
+async function login({ username, password }) {
   // same error for "not found" and "wrong password" — prevents user enumeration
   if (!validateUsername(username)) throw new AppError('Invalid credentials', 401);
   const user = await UserModel.findOne({ username, isDeleted: false }).select('+password');
