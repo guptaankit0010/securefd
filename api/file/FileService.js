@@ -24,53 +24,121 @@ const FORBIDDEN_SIGS = [
   Buffer.from([0x7F,0x45,0x4C,0x46]),   // ELF
   Buffer.from([0x89,0x50,0x4E,0x47]),   // PNG
   Buffer.from('GIF8'),                   // GIF
-  // Buffer.from('%PDF'),
   Buffer.from([0x50,0x4B,0x03,0x04]),   // ZIP (docx == zip container)
   Buffer.from([0x52,0x61,0x72,0x21]),   // RAR
   Buffer.from([0x1F,0x8B]),             // GZIP
 ];
 
+// every signature that belongs to *some* known type — used to catch a client declaring
+// a "no fixed signature" type (text/plain, application/json) while uploading a different
+// known file type's content (e.g. declaring text/plain but uploading a real PDF)
+const ALL_KNOWN_SIGS = [...FORBIDDEN_SIGS, ...Object.values(MIME_SIGNATURES).filter(Boolean).flat()];
+
 // verifies the sniffed first chunk actually matches the mimeType the client declared in `meta`,
 // so a client can't lie about mimeType to smuggle a different file type past validation
 function matchesDeclaredType(chunk, mimeType) {
-  if (FORBIDDEN_SIGS.some(s => chunk.slice(0, s.length).equals(s))) return false;
-
   const expected = MIME_SIGNATURES[mimeType];
-  if (!expected) return true; // text/plain, application/json — no fixed signature to check beyond the forbidden list above
-  return expected.some(s => chunk.slice(0, s.length).equals(s));
+  if (expected) return expected.some(s => chunk.slice(0, s.length).equals(s));
+  // no fixed signature declared (text/plain, application/json) — reject if content
+  // actually matches any OTHER known type's signature (forbidden or otherwise)
+  return !ALL_KNOWN_SIGS.some(s => chunk.slice(0, s.length).equals(s));
 }
 
+// cap on how many (meta, file) pairs a single upload request may contain
+const MAX_FILES_PER_UPLOAD = 10;
+
+// Uploads one or more files from a single multipart request. Each file part must be
+// preceded by its own `meta` field (same "meta must precede file" contract as before,
+// just repeated per pair: meta1, file1, meta2, file2, ...).
+//
+// Best-effort semantics: one file failing (bad mimeType, oversized, disk error, etc.)
+// does not abort the others — every part gets its own entry in the returned array:
+//   { success: true,  file: <FileModel doc> }
+//   { success: false, filename, error, statusCode }
 async function uploadFile(req, ownerId) {
   return new Promise((resolve, reject) => {
-    const bb = Busboy({ headers: req.headers, limits: { fileSize: env.maxFileSizeBytes, files: 1, fields: 1 } });
-    let meta = null;
-    let firstChunk = true;
-    let bytesWritten = 0;
+    const bb = Busboy({
+      headers: req.headers,
+      limits: { fileSize: env.maxFileSizeBytes, files: MAX_FILES_PER_UPLOAD, fields: MAX_FILES_PER_UPLOAD },
+    });
+
+    const results = [];          // one entry per file part, in arrival order
+    let pendingMeta = null;      // validated meta waiting to be consumed by the next file part
+    let pendingMetaError = null; // set when the most recently seen meta field failed validation
+    let pendingWork = 0;         // count of files whose async write/DB work hasn't settled yet
+    let bbFinished = false;
+
+    // resolves once busboy has fully parsed the request AND every file's async work has settled
+    const maybeResolve = () => { if (bbFinished && pendingWork === 0) resolve(results); };
 
     bb.on('field', (name, val) => {
       if (name !== 'meta') return;
-      try { meta = JSON.parse(val); validate(meta, SCHEMAS.fileMeta); }
-      catch (e) { reject(new AppError(e.message || 'Invalid meta', 400)); }
+      try {
+        pendingMeta = JSON.parse(val);
+        validate(pendingMeta, SCHEMAS.fileMeta);
+        pendingMetaError = null;
+      } catch (e) {
+        pendingMeta = null;
+        pendingMetaError = e.message || 'Invalid meta';
+      }
     });
 
-    bb.on('file', (_field, fileStream) => {
+    bb.on('file', (_field, fileStream, info) => {
+      const meta = pendingMeta;
+      const metaError = pendingMetaError;
+      pendingMeta = null;
+      pendingMetaError = null;
+
       if (!meta) {
         // Must drain the stream even though we're rejecting it — busboy pauses its
         // internal parser until this stream is consumed. Without this, the rest of
         // the request body is never read, leaving the socket in a bad state and
         // corrupting the next request on the same keep-alive connection.
         fileStream.resume();
-        return reject(new AppError('meta field must precede file field', 400));
+        results.push({ success: false, filename: info && info.filename, error: metaError || 'meta field must precede file field', statusCode: 400 });
+        return;
       }
+
+      pendingWork++;
+      let firstChunk = true;
+      let bytesWritten = 0;
+      let settledThisFile = false;
 
       const storageName = randomUUID();
       const storagePath = path.join(env.storageDir, storageName);
-      assertSafePath(storagePath);
+
+      const failFile = (error) => {
+        if (settledThisFile) return;
+        settledThisFile = true;
+        cleanup();
+        results.push({ success: false, filename: meta.filename, error: error.message || String(error), statusCode: error.statusCode || 500 });
+        pendingWork--;
+        maybeResolve();
+      };
+
+      try {
+        assertSafePath(storagePath);
+      } catch (e) {
+        fileStream.resume();
+        pendingWork--;
+        results.push({ success: false, filename: meta.filename, error: e.message, statusCode: e.statusCode || 400 });
+        maybeResolve();
+        return;
+      }
 
       const { stream: cipher, iv, getAuthTag } = createEncryptStream();
       const dest = fs.createWriteStream(storagePath);
       const cleanup = () => {
-        fileStream.destroy();
+        // Detach + drain rather than destroy: busboy's parser still expects to push the
+        // remaining bytes of this part into fileStream, and keeps a reference to it
+        // internally. Destroying fileStream mid-part leaves busboy's push() permanently
+        // returning false (backpressure) with nothing left to drain it, which stalls
+        // busboy's writable forever — hanging the ENTIRE request (including any other
+        // files already succeeding in the same multipart body), not just this one file.
+        // Draining lets busboy reach this part's closing boundary naturally so parsing
+        // (and therefore the request) can finish.
+        fileStream.unpipe(cipher);
+        fileStream.resume();
         cipher.destroy();
         dest.destroy();
         fs.unlink(storagePath, () => {});
@@ -80,32 +148,39 @@ async function uploadFile(req, ownerId) {
         if (!firstChunk) { bytesWritten += chunk.length; return; }
         firstChunk = false;
         if (!matchesDeclaredType(chunk, meta.mimeType)) {
-          fileStream.destroy(); cleanup();
-          return reject(new AppError('File content does not match supported or declared mimeType', 415));
+          return failFile(new AppError('File content does not match declared mimeType', 415));
         }
         bytesWritten += chunk.length;
       });
 
-      fileStream.on('limit', () => { fileStream.destroy(); cleanup(); reject(new AppError('File too large', 413)); });
+      fileStream.on('limit', () => failFile(new AppError('File too large', 413)));
 
       fileStream.pipe(cipher).pipe(dest);
 
       dest.on('finish', async () => {
+        if (settledThisFile) return;
         try {
           const file = await FileModel.create({
             owner: ownerId, filename: meta.filename, storageName,
             mimeType: meta.mimeType, size: bytesWritten, iv, authTag: getAuthTag(),
           });
-          resolve(file);
-        } catch (e) { cleanup(); reject(e); }
+          settledThisFile = true;
+          results.push({ success: true, file });
+          pendingWork--;
+          maybeResolve();
+        } catch (e) { failFile(e); }
       });
 
-      fileStream.on('error', err => { cleanup(); reject(err); });
-      cipher.on('error',     err => { cleanup(); reject(err); });
-      dest.on('error',       err => { cleanup(); reject(err); });
+      fileStream.on('error', failFile);
+      cipher.on('error',     failFile);
+      dest.on('error',       failFile);
     });
 
-    bb.on('error', reject);
+    bb.on('filesLimit',  () => results.push({ success: false, error: `Too many files in one request (max ${MAX_FILES_PER_UPLOAD})`, statusCode: 413 }));
+    bb.on('fieldsLimit', () => results.push({ success: false, error: `Too many meta fields in one request (max ${MAX_FILES_PER_UPLOAD})`, statusCode: 413 }));
+
+    bb.on('finish', () => { bbFinished = true; maybeResolve(); });
+    bb.on('error', reject); // malformed multipart body itself — nothing per-file to salvage
     req.pipe(bb);
   });
 }

@@ -9,8 +9,18 @@ const ShareModel  = require('../share/ShareModel');
 const env = require('../../config/env');
 
 async function upload(req, res) {
-  const file = await FileService.uploadFile(req, req.user.uid);
-  sendJson(res, 201, { file: { id: file._id, filename: file.filename, mimeType: file.mimeType, size: file.size } });
+  const results = await FileService.uploadFile(req, req.user.uid);
+  if (results.length === 0) throw new AppError('No files uploaded', 400);
+
+  const files = results.map(r => r.success
+    ? { success: true, file: { id: r.file._id, filename: r.file.filename, mimeType: r.file.mimeType, size: r.file.size } }
+    : { success: false, filename: r.filename, error: r.error });
+
+  const successCount = files.filter(f => f.success).length;
+  // 201 all succeeded, 400 all failed, 207 (Multi-Status) mixed results
+  const statusCode = successCount === files.length ? 201 : successCount === 0 ? 400 : 207;
+
+  sendJson(res, statusCode, { files });
 }
 
 async function list(req, res) {
