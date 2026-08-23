@@ -11,38 +11,47 @@ const FileModel = require('./FileModel');
 const env    = require('../../config/env');
 const logger = require('../../lib/logger');
 
-// expected magic bytes for each allowed mimeType — content must match what the client declares
-const MIME_SIGNATURES = {
-  'text/plain':       null, // no fixed signature; validated by absence of any known binary signature below
-  'application/json': null,
-  'application/pdf':                                                        [Buffer.from('%PDF')],
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': [Buffer.from([0x50,0x4B,0x03,0x04])], // docx == zip container
-};
+// Only two mimeTypes are accepted. Neither has a fixed binary magic header.
+// Validation strategy: reject the file if its first chunk contains bytes that
+// cannot appear in valid UTF-8 text (null bytes, C0/C1 control chars, lone
+// high bytes that aren't valid UTF-8 lead/continuation bytes, etc.).
+const ALLOWED_MIME_TYPES = new Set(['text/plain', 'application/json']);
 
-// always-forbidden signatures, regardless of declared mimeType — never valid for any allowed type here
-const FORBIDDEN_SIGS = [
-  Buffer.from([0x4D,0x5A]),             // MZ  – PE (EXE/DLL)
-  Buffer.from([0x7F,0x45,0x4C,0x46]),   // ELF
-  Buffer.from([0x89,0x50,0x4E,0x47]),   // PNG
-  Buffer.from('GIF8'),                   // GIF
-  Buffer.from([0x50,0x4B,0x03,0x04]),   // ZIP (docx == zip container)
-  Buffer.from([0x52,0x61,0x72,0x21]),   // RAR
-  Buffer.from([0x1F,0x8B]),             // GZIP
-];
+// Returns true if the buffer looks like valid UTF-8 text.
+// Rejects immediately on any byte that has no place in a text or JSON file.
+function looksLikeText(chunk) {
+  let i = 0;
+  while (i < chunk.length) {
+    const b = chunk[i];
+    // Null byte — never valid in text/json
+    if (b === 0x00) return false;
+    // C0 control chars except tab (0x09), LF (0x0A), CR (0x0D)
+    if (b < 0x09 || (b > 0x0D && b < 0x20)) return false;
+    // DEL
+    if (b === 0x7F) return false;
 
-// every signature that belongs to *some* known type — used to catch a client declaring
-// a "no fixed signature" type (text/plain, application/json) while uploading a different
-// known file type's content (e.g. declaring text/plain but uploading a real PDF)
-const ALL_KNOWN_SIGS = [...FORBIDDEN_SIGS, ...Object.values(MIME_SIGNATURES).filter(Boolean).flat()];
+    // Multi-byte UTF-8 sequences
+    let extra = 0;
+    if      ((b & 0xE0) === 0xC0) extra = 1; // 110x xxxx
+    else if ((b & 0xF0) === 0xE0) extra = 2; // 1110 xxxx
+    else if ((b & 0xF8) === 0xF0) extra = 3; // 1111 0xxx
+    else if  (b > 0x7F)           return false; // lone high byte — invalid
 
-// verifies the sniffed first chunk actually matches the mimeType the client declared in `meta`,
-// so a client can't lie about mimeType to smuggle a different file type past validation
+    for (let j = 1; j <= extra; j++) {
+      if (i + j >= chunk.length) break; // continuation bytes may be in next chunk — give benefit of doubt at boundary
+      if ((chunk[i + j] & 0xC0) !== 0x80) return false; // expected 10xx xxxx continuation
+    }
+    i += 1 + extra;
+  }
+  return true;
+}
+
+// Returns true only if the content is consistent with the declared mimeType.
+// Any mimeType not on the allowlist is rejected before even reaching this function
+// (schema validator enforces the enum), but we guard here too for defence-in-depth.
 function matchesDeclaredType(chunk, mimeType) {
-  const expected = MIME_SIGNATURES[mimeType];
-  if (expected) return expected.some(s => chunk.slice(0, s.length).equals(s));
-  // no fixed signature declared (text/plain, application/json) — reject if content
-  // actually matches any OTHER known type's signature (forbidden or otherwise)
-  return !ALL_KNOWN_SIGS.some(s => chunk.slice(0, s.length).equals(s));
+  if (!ALLOWED_MIME_TYPES.has(mimeType)) return false;
+  return looksLikeText(chunk);
 }
 
 // cap on how many (meta, file) pairs a single upload request may contain
