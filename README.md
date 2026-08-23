@@ -24,7 +24,9 @@ npm install
 
 ### 2. Install nodemon (for development)
 
-`nodemon` is already listed as a `devDependency` and installed by `npm install` in step 1. No separate install needed.
+```bash
+npm install -g nodemon
+```
 
 ### 3. Generate a self-signed TLS certificate
 
@@ -90,6 +92,28 @@ npm start
 The server will be available at `https://localhost:4433`.
 
 > Your browser will show a certificate warning because the cert is self-signed. In Postman, disable "SSL certificate verification" under Settings → General.
+
+---
+
+## Postman collection
+
+A ready-to-use Postman collection (`Secure File Drop.postman_collection.json`) is included in the repository root. It covers every API endpoint with pre-filled request bodies and example variables.
+
+**How to import:**
+
+1. Open Postman → **Import** → select `Secure File Drop.postman_collection.json`
+2. Set the collection variable `baseUrl` to `https://localhost:4433`
+3. In Postman settings (Settings → General), turn off **SSL certificate verification** (required because the cert is self-signed)
+4. Run **Sign Up** first to create a user, then **Login** — the collection auto-saves `accessToken` and `refreshToken` from the login response into collection variables, so every subsequent request is automatically authenticated
+
+**Folder structure inside the collection:**
+
+| Folder | Endpoints |
+|--------|-----------|
+| Auth | Signup, Login, Refresh, Logout |
+| Users (Admin) | List users, Create user, Update user, Delete user, Get me |
+| Files | Upload (single & multi), List, Get one, Delete |
+| Sharing | Create share link, Download via share link (public), Revoke share link |
 
 ---
 
@@ -295,15 +319,15 @@ DELETE /api/files/:fileId/share/:tokenId
 
 ```mermaid
 graph TB
-    Client["Client (Browser / Postman / Mobile)"]
+    Client["Client\n(Browser / Postman / Mobile)"]
 
-    subgraph Server["HTTPS Server (Node.js, no Express)"]
+    subgraph Server["HTTPS Server (Node.js — no Express)"]
         CORS["CORS preflight handler"]
         Router["Custom Regex Router"]
 
         subgraph Middleware["Middleware chain"]
-            Auth["requireAuth (Bearer or cookie)"]
-            RBAC["requireRole / requireScope"]
+            Auth["requireAuth\n(Bearer token or __Host-session cookie)"]
+            RBAC["requireRole / requireScope\n(role-based + scope-based guards)"]
         end
 
         subgraph Controllers
@@ -314,26 +338,26 @@ graph TB
         end
 
         subgraph Services
-            AuthSvc["AuthService"]
-            UserSvc["UserService"]
-            FileSvc["FileService"]
-            ShareSvc["ShareService"]
+            AuthSvc["AuthService\n(signup · login · refresh · revoke)"]
+            UserSvc["UserService\n(CRUD users)"]
+            FileSvc["FileService\n(Busboy multipart parser)"]
+            ShareSvc["ShareService\n(create · resolve · revoke tokens)"]
         end
 
         subgraph Libs["Shared libraries"]
-            Crypto["lib/crypto (AES-256-GCM, scrypt, HMAC)"]
-            Validation["lib/validation (schemas, sanitize)"]
-            Logger["lib/logger (structured JSON)"]
-            ErrHandler["centralErrorHandler"]
+            Crypto["lib/crypto\n(AES-256-GCM · bcrypt · HMAC tokens)"]
+            Validation["lib/validation\n(schemas · sanitize)"]
+            Logger["lib/logger\n(structured JSON)"]
+            ErrHandler["centralErrorHandler\n(AppError → safe JSON)"]
         end
     end
 
     subgraph Persistence
-        MongoDB[("MongoDB (Users, Sessions, Files, Shares)")]
-        Disk[("Local disk (Encrypted blobs)")]
+        MongoDB[("MongoDB\nUsers · Sessions · Files · Shares")]
+        Disk[("Local disk\nEncrypted blobs (.bin)")]
     end
 
-    Client -->|"HTTPS TLS"| CORS
+    Client -->|"HTTPS (TLS 1.2+)"| CORS
     CORS --> Router
     Router --> Middleware
     Middleware --> Controllers
@@ -346,20 +370,349 @@ graph TB
 
 ---
 
+### Module / layer map
+
+```mermaid
+graph LR
+    subgraph Entry
+        server.js
+    end
+
+    subgraph Config
+        env.js["config/env.js\nLoads & validates .env"]
+        auth_cfg["config/auth.js\nTTLs · role→scope map · MAX_SESSIONS"]
+        routes_cfg["config/routes.js\nRoute table with middleware chains"]
+    end
+
+    subgraph Middleware
+        session_mw["middleware/session.js\nrequireAuth — Bearer + cookie"]
+        rbac_mw["middleware/rbac.js\nrequireRole · requireScope"]
+        err_mw["middleware/errorHandler.js\nAppError · centralErrorHandler"]
+    end
+
+    subgraph API
+        AuthCtrl --> AuthSvc["api/auth/AuthService.js"]
+        UserCtrl --> UserSvc["api/user/UserService.js"]
+        FileCtrl --> FileSvc["api/file/FileService.js"]
+        ShareCtrl --> ShareSvc["api/share/ShareService.js"]
+    end
+
+    subgraph Models["Mongoose models"]
+        UserModel["UserModel\nusername · password(hash) · role · isDeleted"]
+        SessionModel["SessionModel\nowner · deviceId · tokenHash · expiresAt · isRevoked"]
+        FileModel["FileModel\nowner · filename · storageName · iv · authTag · isDeleted"]
+        ShareModel["ShareModel\nfile · tokenId · expiresAt · revoked"]
+    end
+
+    subgraph LibLayer["lib/"]
+        router_lib["lib/router.js\nCustom regex router"]
+        fileCrypto["lib/crypto/fileCrypto.js\nAES-256-GCM encrypt/decrypt streams"]
+        tokens_lib["lib/crypto/tokens.js\nHMAC sign · verify (timingSafeEqual)"]
+        password_lib["lib/crypto/password.js\nbcrypt hash · verify"]
+        schemas_lib["lib/validation/schemas.js\nJSON schema validators"]
+        sanitize_lib["lib/validation/sanitize.js\nInput sanitization · path safety"]
+        http_lib["lib/http.js\nreadJsonBody · sendJson · cookies · CORS"]
+        logger_lib["lib/logger.js\nStructured JSON logger"]
+        perf_lib["lib/perf.js\nAsync timing helper"]
+        shutdown_lib["lib/shutdown.js\nGraceful SIGTERM/SIGINT shutdown"]
+    end
+
+    server.js --> Config
+    server.js --> Middleware
+    server.js --> router_lib
+    routes_cfg --> API
+    routes_cfg --> Middleware
+    API --> Models
+    API --> LibLayer
+    AuthSvc --> SessionModel
+    AuthSvc --> UserModel
+    FileSvc --> FileModel
+    FileSvc --> fileCrypto
+    ShareSvc --> ShareModel
+    ShareSvc --> FileModel
+    ShareSvc --> tokens_lib
+```
+
+---
+
+### Authentication flow — login
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant AC as AuthController
+    participant AS as AuthService
+    participant DB as MongoDB
+    participant Crypto as lib/crypto
+
+    C->>AC: POST /api/auth/login\n{username, password}
+    AC->>AC: sanitizeBody() + validate(SCHEMAS.login)
+    AC->>AS: loginAll({username, password}, deviceId?)
+
+    AS->>DB: UserModel.findOne({username, isDeleted:false})
+    DB-->>AS: user doc (with hashed password)
+    AS->>Crypto: verifyPassword(plain, hash) — bcrypt
+    Crypto-->>AS: true / false
+
+    alt Invalid credentials
+        AS-->>AC: throw AppError(401)
+        AC-->>C: 401 {error, requestId}
+    end
+
+    AS->>Crypto: signToken(cookiePayload, SESSION_SECRET) — HMAC
+    AS->>Crypto: signToken(accessPayload,  SESSION_SECRET) — 15 min
+    AS->>Crypto: signToken(refreshPayload, SESSION_SECRET) — 7 days
+    AS->>AS: enforceSessionLimit(userId, deviceId)
+    AS->>DB: SessionModel.findOneAndUpdate(upsert)\n{tokenHash: sha256(refreshToken), expiresAt}
+    DB-->>AS: session saved
+
+    AS-->>AC: {cookieToken, accessToken, refreshToken, scopes}
+    AC->>C: Set-Cookie: __Host-session=<cookieToken>; HttpOnly; Secure; SameSite=Strict
+    AC-->>C: 200 {accessToken, refreshToken, expiresIn, scopes}
+```
+
+---
+
+### Token refresh & reuse detection
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant AC as AuthController
+    participant AS as AuthService
+    participant DB as MongoDB
+    participant Crypto as lib/crypto
+
+    C->>AC: POST /api/auth/refresh\n{refreshToken}
+    AC->>AS: refreshTokens(rawRefreshToken)
+    AS->>Crypto: verifyToken(rawRefreshToken, SESSION_SECRET)
+    
+    alt Token signature invalid or expired
+        Crypto-->>AS: throw AppError(401)
+        AS-->>C: 401 Unauthorized
+    end
+
+    Crypto-->>AS: payload {uid, deviceId, type:"refresh"}
+    AS->>DB: SessionModel.findOne({owner:uid, deviceId})
+    
+    alt Session revoked or expired
+        DB-->>AS: null / isRevoked=true
+        AS-->>C: 401 Session expired or revoked
+    end
+
+    AS->>AS: sha256(rawRefreshToken) === session.tokenHash?
+
+    alt Token reuse detected (hash mismatch)
+        AS->>DB: SessionModel.updateMany({owner:uid}, {isRevoked:true})
+        Note over AS,DB: All sessions nuked — breach response
+        AS-->>C: 401 Compromised token detected
+    end
+
+    AS->>DB: UserModel.findById(uid)
+    AS->>Crypto: signToken(new accessToken)  — 15 min
+    AS->>Crypto: signToken(new refreshToken) — 7 days
+    AS->>DB: SessionModel.findOneAndUpdate\n(rotate tokenHash, reset expiresAt)
+    AS-->>C: 200 {accessToken, refreshToken, expiresIn, scopes}
+```
+
+---
+
+### Request middleware chain
+
+```mermaid
+flowchart TD
+    Req["Incoming HTTPS request"] --> CORS
+
+    CORS{{"OPTIONS preflight?"}}
+    CORS -- Yes --> Return204["Return 204 No Content"]
+    CORS -- No --> Router["Custom regex router\n(matches method + path)"]
+
+    Router --> NotFound{{"Route found?"}}
+    NotFound -- No --> Err404["404 Not Found"]
+    NotFound -- Yes --> H1["Handler 1\n(requireAuth)"]
+
+    H1 --> BearerCheck{{"Authorization:\nBearer <token>?"}}
+    BearerCheck -- Yes --> VerifyAccess["verifyToken(token)\ncheck type === 'access'"]
+    BearerCheck -- No --> CookieCheck{{"__Host-session\ncookie present?"}}
+    CookieCheck -- No --> Err401A["401 Not authenticated"]
+    CookieCheck -- Yes --> VerifyCookie["verifyToken(cookie)"]
+
+    VerifyAccess --> TokenOK{{"Valid?"}}
+    VerifyCookie --> TokenOK
+    TokenOK -- No --> Err401B["401 Unauthorized"]
+    TokenOK -- Yes --> SetUser["req.user = payload\n{uid, role, scopes, deviceId}"]
+
+    SetUser --> H2["Handler 2\nrequireRole / requireScope"]
+    H2 --> Guard{{"Role / scope\nmatch?"}}
+    Guard -- No --> Err403["403 Forbidden"]
+    Guard -- Yes --> Controller["Controller handler"]
+
+    Controller --> Service["Service layer"]
+    Service --> DB["MongoDB / Disk"]
+    DB --> Response["sendJson(res, 2xx, data)"]
+
+    Controller -->|"throw AppError"| EH["centralErrorHandler"]
+    Service    -->|"throw AppError"| EH
+    EH --> LogWarn["logger.warn (operational)\nor logger.error (unexpected)"]
+    LogWarn --> ErrResponse["sendJson(res, statusCode,\n{error, requestId})"]
+```
+
+---
+
+### File upload flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant FC as FileController
+    participant FS as FileService
+    participant BB as Busboy (multipart parser)
+    participant Crypto as AES-256-GCM cipher stream
+    participant Disk as Local disk (storage/)
+    participant DB as MongoDB
+
+    C->>FC: POST /api/files\nContent-Type: multipart/form-data\n[meta₁, file₁, meta₂, file₂, ...]
+    FC->>FS: uploadFile(req, ownerId)
+    FS->>BB: req.pipe(busboy)
+
+    loop For each (meta, file) pair
+        BB->>FS: field event: name="meta"\n{filename, mimeType, declaredSize}
+        FS->>FS: JSON.parse + validate(SCHEMAS.fileMeta)
+        BB->>FS: file event: fileStream + info
+        FS->>FS: assertSafePath(storagePath)
+        FS->>Crypto: createEncryptStream() → {cipher, iv, getAuthTag}
+        FS->>Disk: createWriteStream(uuid)
+
+        FS->>FS: fileStream.on('data'):\nfirst chunk → looksLikeText()?\n(UTF-8 byte inspection)
+
+        alt Content does not match declared mimeType
+            FS->>FS: failFile(AppError 415)\ncleanup: unpipe, drain, destroy, unlink
+        end
+
+        FS->>Crypto: fileStream.pipe(cipher)
+        Crypto->>Disk: cipher.pipe(dest)
+
+        alt File too large (busboy limit event)
+            FS->>FS: failFile(AppError 413)
+        end
+
+        Disk->>FS: dest 'finish' event
+        FS->>DB: FileModel.create\n{owner, filename, storageName, mimeType,\nsize, iv, authTag}
+        DB-->>FS: saved file doc
+        FS->>FS: results.push({success:true, file})
+    end
+
+    FS-->>FC: results[]
+    FC-->>C: 201 all OK\n207 partial success\n400 all failed\n{files:[{success,…}]}
+```
+
+---
+
+### File download via share link
+
+```mermaid
+sequenceDiagram
+    participant Anyone as Anyone (no auth needed)
+    participant SC as ShareController
+    participant SS as ShareService
+    participant Crypto as AES-256-GCM decipher stream
+    participant Disk as Local disk (storage/)
+    participant DB as MongoDB
+
+    Anyone->>SC: GET /api/share/<token>
+    SC->>SS: resolveShareToken(rawToken)
+
+    SS->>SS: verifyToken(rawToken, SHARE_TOKEN_SECRET)\nHMAC signature + exp check
+    
+    alt Invalid signature or expired JWT claim
+        SS-->>Anyone: 401 Token invalid or expired
+    end
+
+    SS->>DB: ShareModel.findOne({tokenId, revoked:false})
+
+    alt Not found or revoked
+        SS-->>Anyone: 401 Token invalid or expired
+    end
+
+    DB-->>SS: share doc {expiresAt}
+    SS->>SS: share.expiresAt < now?
+
+    alt Expired in DB
+        SS-->>Anyone: 401 Token invalid or expired
+    end
+
+    SS->>DB: FileModel.findOne({_id:fileId, isDeleted:false})
+    DB-->>SS: file doc {storageName, iv, authTag, mimeType, filename}
+    SS-->>SC: file doc
+
+    SC->>Disk: createReadStream(storage/storageName)
+    SC->>Crypto: createDecryptStream(iv, authTag)\naes-256-gcm decipher
+    SC->>Anyone: Content-Disposition: attachment; filename="…"\nContent-Type: mimeType\nreadStream.pipe(decipher).pipe(res)
+```
+
+---
+
+### Error handling
+
+```mermaid
+flowchart TD
+    Code["Any controller / service / middleware"] -->|"throw AppError(message, statusCode)"| IsOp{{"isOperational\n= true"}}
+    Code -->|"unexpected JS error\n(bug, DB driver crash…)"| IsOp2{{"isOperational\n= false (default)"}}
+
+    IsOp -- Yes --> CEH["centralErrorHandler(err, req, res)"]
+    IsOp2 -- No --> CEH
+
+    CEH --> GenId["requestId = randomUUID()"]
+    GenId --> Check{{"err.isOperational?"}}
+
+    Check -- Yes --> WarnLog["logger.warn\n{requestId, method, url, status, message}"]
+    Check -- No  --> ErrLog["logger.error\n{requestId, method, url, status, err (full stack)}"]
+
+    WarnLog --> SafeMsg["message = err.message\n(safe to expose to client)"]
+    ErrLog  --> GenMsg["message = 'Internal server error'\n(stack never sent to client)"]
+
+    SafeMsg --> Send["sendJson(res, statusCode,\n{error: message, requestId})"]
+    GenMsg  --> Send
+
+    Send --> Client["Client receives\n{success:false, error:'…', requestId:'uuid'}"]
+
+    style IsOp2 fill:#c0392b,color:#fff
+    style ErrLog fill:#c0392b,color:#fff
+    style GenMsg fill:#c0392b,color:#fff
+```
+
+**Error catalogue:**
+
+| Status | Thrown when |
+|--------|-------------|
+| 400 | Malformed JSON, missing required fields, invalid meta, no files in upload |
+| 401 | No token/cookie, invalid signature, expired token, wrong token type, refresh reuse |
+| 403 | Role too low (`requireRole`), missing scope (`requireScope`) |
+| 404 | File not found, share token not in DB, user not found |
+| 409 | Username already taken |
+| 413 | File exceeds `MAX_FILE_SIZE_BYTES`, too many files per request |
+| 415 | File content does not match declared `mimeType` |
+| 500 | Unexpected errors (DB crash, disk error, etc.) — stack hidden from client |
+
+---
+
 ### Session & token lifetime
 
 ```mermaid
 gantt
-    title Token and session lifetimes (not to scale)
-    dateFormat X
-    axisFormat %s
+    title Token / session lifetimes (not to scale)
+    dateFormat  X
+    axisFormat  %s
 
     section Bearer path
-    Access token 15 min      : 0, 900
-    Refresh token 7 days     : 0, 604800
+    Access token (15 min)       : 0, 900
+    Refresh token (7 days)      : 0, 604800
 
     section Cookie path
-    Session cookie 8 hours   : 0, 28800
+    __Host-session cookie (8 h) : 0, 28800
+
+    section Limits
+    Max 2 concurrent sessions per user (all devices) : milestone, 0, 0
 ```
 
 - **Access token** — stateless JWT-like HMAC token; no DB lookup on every request.
@@ -367,6 +720,60 @@ gantt
 - **Cookie token** — long-lived, same secret as access token; verified entirely from signature.
 - **Session cap** — `MAX_SESSIONS = 2` per user. Oldest session is evicted when cap is reached.
 - **Reuse detection** — if a refresh token is used twice, all sessions for that user are immediately revoked.
+
+---
+
+### Data models
+
+```mermaid
+erDiagram
+    USER {
+        ObjectId _id PK
+        string   username
+        string   password "bcrypt hash"
+        string   role "admin | manager | viewer"
+        boolean  isDeleted
+        Date     createdAt
+        Date     updatedAt
+    }
+
+    SESSION {
+        ObjectId _id PK
+        ObjectId owner FK
+        string   deviceId "UUID — one slot per device"
+        string   tokenHash "sha256 of refresh token"
+        Date     expiresAt
+        boolean  isRevoked
+        Date     createdAt
+    }
+
+    FILE {
+        ObjectId _id PK
+        ObjectId owner FK
+        string   filename
+        string   storageName "UUID filename on disk"
+        string   mimeType
+        number   size
+        Buffer   iv "12-byte AES-GCM IV"
+        Buffer   authTag "16-byte GCM auth tag"
+        boolean  isDeleted
+        Date     createdAt
+        Date     updatedAt
+    }
+
+    SHARE {
+        ObjectId _id PK
+        ObjectId file FK
+        string   tokenId "UUID embedded in signed token"
+        Date     expiresAt
+        boolean  revoked
+        Date     createdAt
+    }
+
+    USER ||--o{ SESSION : "has"
+    USER ||--o{ FILE    : "owns"
+    FILE ||--o{ SHARE   : "has"
+```
 
 ---
 
@@ -404,7 +811,7 @@ gantt
 ├── lib/
 │   ├── crypto/
 │   │   ├── fileCrypto.js   AES-256-GCM encrypt/decrypt streams
-│   │   ├── password.js     scrypt hash + verify
+│   │   ├── password.js     bcrypt hash + verify
 │   │   └── tokens.js       HMAC sign + verify (timingSafeEqual)
 │   ├── validation/
 │   │   ├── schemas.js      JSON schema validators
@@ -419,6 +826,7 @@ gantt
 │   ├── rbac.js            requireRole, requireScope guards
 │   └── session.js         requireAuth — Bearer token + cookie
 ├── storage/           Encrypted file blobs (git-ignored)
+├── Secure File Drop.postman_collection.json
 ├── .env               Secret configuration (git-ignored)
 └── server.js          Entry point — HTTPS server + MongoDB connect
 ```
