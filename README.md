@@ -873,19 +873,6 @@ Every query-hot field has an index created automatically at startup via `ensureI
 
 ---
 
-## Sharding guidance
-
-> This project runs fine on a single-node replica set. The table below is informational — it shows what shard keys to choose if you ever need to scale horizontally.
-
-| Collection | Shard key | Reason |
-|------------|-----------|--------|
-| `users` | `{ _id: "hashed" }` | Even distribution; ID is the primary lookup key |
-| `sessions` | `{ owner: 1, deviceId: 1 }` | Matches the unique index; no scatter-gather on session upsert |
-| `files` | `{ owner: "hashed" }` | A given user's files stay on one shard |
-| `sharetokens` | `{ file: 1 }` | Tokens are co-located with their parent file |
-
----
-
 ## Session cookies vs Bearer access tokens — security perspective
 
 Both authentication methods are supported simultaneously. Here is why each exists and what protects it.
