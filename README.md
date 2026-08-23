@@ -445,30 +445,30 @@ sequenceDiagram
     participant DB as MongoDB
     participant Crypto as lib/crypto
 
-    C->>AC: POST /api/auth/login\n{username, password}
-    AC->>AC: sanitizeBody() + validate(SCHEMAS.login)
-    AC->>AS: loginAll({username, password}, deviceId?)
+    C->>AC: POST /api/auth/login with username and password
+    AC->>AC: sanitizeBody + validate
+    AC->>AS: loginAll(credentials, deviceId)
 
-    AS->>DB: UserModel.findOne({username, isDeleted:false})
-    DB-->>AS: user doc (with hashed password)
-    AS->>Crypto: verifyPassword(plain, hash) — bcrypt
-    Crypto-->>AS: true / false
+    AS->>DB: UserModel.findOne username isDeleted=false
+    DB-->>AS: user doc with hashed password
+    AS->>Crypto: verifyPassword plain vs hash via scrypt
+    Crypto-->>AS: true or false
 
     alt Invalid credentials
-        AS-->>AC: throw AppError(401)
-        AC-->>C: 401 {error, requestId}
+        AS-->>AC: throw AppError 401
+        AC-->>C: 401 error + requestId
     end
 
-    AS->>Crypto: signToken(cookiePayload, SESSION_SECRET) — HMAC
-    AS->>Crypto: signToken(accessPayload,  SESSION_SECRET) — 15 min
-    AS->>Crypto: signToken(refreshPayload, SESSION_SECRET) — 7 days
-    AS->>AS: enforceSessionLimit(userId, deviceId)
-    AS->>DB: SessionModel.findOneAndUpdate(upsert)\n{tokenHash: sha256(refreshToken), expiresAt}
+    AS->>Crypto: signToken cookiePayload via HMAC
+    AS->>Crypto: signToken accessPayload 15 min
+    AS->>Crypto: signToken refreshPayload 7 days
+    AS->>AS: enforceSessionLimit userId deviceId
+    AS->>DB: SessionModel.findOneAndUpdate upsert with tokenHash and expiresAt
     DB-->>AS: session saved
 
-    AS-->>AC: {cookieToken, accessToken, refreshToken, scopes}
-    AC->>C: Set-Cookie: __Host-session=<cookieToken>; HttpOnly; Secure; SameSite=Strict
-    AC-->>C: 200 {accessToken, refreshToken, expiresIn, scopes}
+    AS-->>AC: cookieToken accessToken refreshToken scopes
+    AC->>C: Set-Cookie __Host-session HttpOnly Secure SameSite=Strict
+    AC-->>C: 200 accessToken refreshToken expiresIn scopes
 ```
 
 ---
@@ -483,36 +483,36 @@ sequenceDiagram
     participant DB as MongoDB
     participant Crypto as lib/crypto
 
-    C->>AC: POST /api/auth/refresh\n{refreshToken}
+    C->>AC: POST /api/auth/refresh with refreshToken
     AC->>AS: refreshTokens(rawRefreshToken)
-    AS->>Crypto: verifyToken(rawRefreshToken, SESSION_SECRET)
-    
+    AS->>Crypto: verifyToken rawRefreshToken SESSION_SECRET
+
     alt Token signature invalid or expired
-        Crypto-->>AS: throw AppError(401)
+        Crypto-->>AS: throw AppError 401
         AS-->>C: 401 Unauthorized
     end
 
-    Crypto-->>AS: payload {uid, deviceId, type:"refresh"}
-    AS->>DB: SessionModel.findOne({owner:uid, deviceId})
-    
+    Crypto-->>AS: payload uid deviceId type=refresh
+    AS->>DB: SessionModel.findOne owner=uid deviceId
+
     alt Session revoked or expired
-        DB-->>AS: null / isRevoked=true
+        DB-->>AS: null or isRevoked=true
         AS-->>C: 401 Session expired or revoked
     end
 
-    AS->>AS: sha256(rawRefreshToken) === session.tokenHash?
+    AS->>AS: compare sha256(rawRefreshToken) vs session.tokenHash
 
-    alt Token reuse detected (hash mismatch)
-        AS->>DB: SessionModel.updateMany({owner:uid}, {isRevoked:true})
-        Note over AS,DB: All sessions nuked — breach response
+    alt Token reuse detected hash mismatch
+        AS->>DB: SessionModel.updateMany owner=uid set isRevoked=true
+        Note over AS,DB: All sessions revoked - breach response
         AS-->>C: 401 Compromised token detected
     end
 
-    AS->>DB: UserModel.findById(uid)
-    AS->>Crypto: signToken(new accessToken)  — 15 min
-    AS->>Crypto: signToken(new refreshToken) — 7 days
-    AS->>DB: SessionModel.findOneAndUpdate\n(rotate tokenHash, reset expiresAt)
-    AS-->>C: 200 {accessToken, refreshToken, expiresIn, scopes}
+    AS->>DB: UserModel.findById uid
+    AS->>Crypto: signToken new accessToken 15 min
+    AS->>Crypto: signToken new refreshToken 7 days
+    AS->>DB: SessionModel.findOneAndUpdate rotate tokenHash reset expiresAt
+    AS-->>C: 200 accessToken refreshToken expiresIn scopes
 ```
 
 ---
@@ -525,36 +525,36 @@ flowchart TD
 
     CORS{{"OPTIONS preflight?"}}
     CORS -- Yes --> Return204["Return 204 No Content"]
-    CORS -- No --> Router["Custom regex router\n(matches method + path)"]
+    CORS -- No --> Router["Custom regex router matches method and path"]
 
     Router --> NotFound{{"Route found?"}}
     NotFound -- No --> Err404["404 Not Found"]
-    NotFound -- Yes --> H1["Handler 1\n(requireAuth)"]
+    NotFound -- Yes --> H1["Handler 1 requireAuth"]
 
-    H1 --> BearerCheck{{"Authorization:\nBearer <token>?"}}
-    BearerCheck -- Yes --> VerifyAccess["verifyToken(token)\ncheck type === 'access'"]
-    BearerCheck -- No --> CookieCheck{{"__Host-session\ncookie present?"}}
+    H1 --> BearerCheck{{"Authorization Bearer token present?"}}
+    BearerCheck -- Yes --> VerifyAccess["verifyToken check type = access"]
+    BearerCheck -- No --> CookieCheck{{"__Host-session cookie present?"}}
     CookieCheck -- No --> Err401A["401 Not authenticated"]
-    CookieCheck -- Yes --> VerifyCookie["verifyToken(cookie)"]
+    CookieCheck -- Yes --> VerifyCookie["verifyToken cookie"]
 
     VerifyAccess --> TokenOK{{"Valid?"}}
     VerifyCookie --> TokenOK
     TokenOK -- No --> Err401B["401 Unauthorized"]
-    TokenOK -- Yes --> SetUser["req.user = payload\n{uid, role, scopes, deviceId}"]
+    TokenOK -- Yes --> SetUser["req.user = uid role scopes deviceId"]
 
-    SetUser --> H2["Handler 2\nrequireRole / requireScope"]
-    H2 --> Guard{{"Role / scope\nmatch?"}}
+    SetUser --> H2["Handler 2 requireRole or requireScope"]
+    H2 --> Guard{{"Role and scope match?"}}
     Guard -- No --> Err403["403 Forbidden"]
     Guard -- Yes --> Controller["Controller handler"]
 
     Controller --> Service["Service layer"]
-    Service --> DB["MongoDB / Disk"]
-    DB --> Response["sendJson(res, 2xx, data)"]
+    Service --> DB["MongoDB or Disk"]
+    DB --> Response["sendJson 2xx data"]
 
     Controller -->|"throw AppError"| EH["centralErrorHandler"]
     Service    -->|"throw AppError"| EH
-    EH --> LogWarn["logger.warn (operational)\nor logger.error (unexpected)"]
-    LogWarn --> ErrResponse["sendJson(res, statusCode,\n{error, requestId})"]
+    EH --> LogWarn["logger.warn operational or logger.error unexpected"]
+    LogWarn --> ErrResponse["sendJson statusCode error requestId"]
 ```
 
 ---
@@ -566,44 +566,44 @@ sequenceDiagram
     participant C as Client
     participant FC as FileController
     participant FS as FileService
-    participant BB as Busboy (multipart parser)
-    participant Crypto as AES-256-GCM cipher stream
-    participant Disk as Local disk (storage/)
+    participant BB as Busboy multipart parser
+    participant Crypto as AES-256-GCM cipher
+    participant Disk as Local disk storage
     participant DB as MongoDB
 
-    C->>FC: POST /api/files\nContent-Type: multipart/form-data\n[meta₁, file₁, meta₂, file₂, ...]
-    FC->>FS: uploadFile(req, ownerId)
-    FS->>BB: req.pipe(busboy)
+    C->>FC: POST /api/files multipart/form-data with meta and file pairs
+    FC->>FS: uploadFile req ownerId
+    FS->>BB: req.pipe busboy
 
-    loop For each (meta, file) pair
-        BB->>FS: field event: name="meta"\n{filename, mimeType, declaredSize}
-        FS->>FS: JSON.parse + validate(SCHEMAS.fileMeta)
-        BB->>FS: file event: fileStream + info
-        FS->>FS: assertSafePath(storagePath)
-        FS->>Crypto: createEncryptStream() → {cipher, iv, getAuthTag}
-        FS->>Disk: createWriteStream(uuid)
+    loop For each meta and file pair
+        BB->>FS: field event name=meta with filename mimeType declaredSize
+        FS->>FS: JSON.parse + validate fileMeta schema
+        BB->>FS: file event fileStream
+        FS->>FS: assertSafePath storagePath
+        FS->>Crypto: createEncryptStream returns cipher iv getAuthTag
+        FS->>Disk: createWriteStream uuid filename
 
-        FS->>FS: fileStream.on('data'):\nfirst chunk → looksLikeText()?\n(UTF-8 byte inspection)
+        FS->>FS: first chunk looksLikeText UTF-8 byte inspection
 
         alt Content does not match declared mimeType
-            FS->>FS: failFile(AppError 415)\ncleanup: unpipe, drain, destroy, unlink
+            FS->>FS: failFile AppError 415 then unpipe drain destroy unlink
         end
 
-        FS->>Crypto: fileStream.pipe(cipher)
-        Crypto->>Disk: cipher.pipe(dest)
+        FS->>Crypto: fileStream.pipe cipher
+        Crypto->>Disk: cipher.pipe dest
 
-        alt File too large (busboy limit event)
-            FS->>FS: failFile(AppError 413)
+        alt File too large busboy limit event
+            FS->>FS: failFile AppError 413
         end
 
-        Disk->>FS: dest 'finish' event
-        FS->>DB: FileModel.create\n{owner, filename, storageName, mimeType,\nsize, iv, authTag}
+        Disk->>FS: dest finish event
+        FS->>DB: FileModel.create owner filename storageName mimeType size iv authTag
         DB-->>FS: saved file doc
-        FS->>FS: results.push({success:true, file})
+        FS->>FS: results.push success=true file
     end
 
-    FS-->>FC: results[]
-    FC-->>C: 201 all OK\n207 partial success\n400 all failed\n{files:[{success,…}]}
+    FS-->>FC: results array
+    FC-->>C: 201 all OK or 207 partial or 400 all failed
 ```
 
 ---
@@ -612,42 +612,42 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Anyone as Anyone (no auth needed)
+    participant Anyone as Anyone no auth needed
     participant SC as ShareController
     participant SS as ShareService
-    participant Crypto as AES-256-GCM decipher stream
-    participant Disk as Local disk (storage/)
+    participant Crypto as AES-256-GCM decipher
+    participant Disk as Local disk storage
     participant DB as MongoDB
 
-    Anyone->>SC: GET /api/share/<token>
-    SC->>SS: resolveShareToken(rawToken)
+    Anyone->>SC: GET /api/share/token
+    SC->>SS: resolveShareToken rawToken
 
-    SS->>SS: verifyToken(rawToken, SHARE_TOKEN_SECRET)\nHMAC signature + exp check
-    
-    alt Invalid signature or expired JWT claim
+    SS->>SS: verifyToken HMAC signature and exp check
+
+    alt Invalid signature or expired
         SS-->>Anyone: 401 Token invalid or expired
     end
 
-    SS->>DB: ShareModel.findOne({tokenId, revoked:false})
+    SS->>DB: ShareModel.findOne tokenId revoked=false
 
     alt Not found or revoked
         SS-->>Anyone: 401 Token invalid or expired
     end
 
-    DB-->>SS: share doc {expiresAt}
-    SS->>SS: share.expiresAt < now?
+    DB-->>SS: share doc with expiresAt
+    SS->>SS: check share.expiresAt vs now
 
     alt Expired in DB
         SS-->>Anyone: 401 Token invalid or expired
     end
 
-    SS->>DB: FileModel.findOne({_id:fileId, isDeleted:false})
-    DB-->>SS: file doc {storageName, iv, authTag, mimeType, filename}
+    SS->>DB: FileModel.findOne fileId isDeleted=false
+    DB-->>SS: file doc storageName iv authTag mimeType filename
     SS-->>SC: file doc
 
-    SC->>Disk: createReadStream(storage/storageName)
-    SC->>Crypto: createDecryptStream(iv, authTag)\naes-256-gcm decipher
-    SC->>Anyone: Content-Disposition: attachment; filename="…"\nContent-Type: mimeType\nreadStream.pipe(decipher).pipe(res)
+    SC->>Disk: createReadStream storage/storageName
+    SC->>Crypto: createDecryptStream iv authTag
+    SC-->>Anyone: 200 file download as attachment
 ```
 
 ---
@@ -656,27 +656,24 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    Code["Any controller / service / middleware"] -->|"throw AppError(message, statusCode)"| IsOp{{"isOperational\n= true"}}
-    Code -->|"unexpected JS error\n(bug, DB driver crash…)"| IsOp2{{"isOperational\n= false (default)"}}
+    Code["Any controller or service or middleware"] -->|"throw AppError operational"| CEH
+    Code2["Any controller or service or middleware"] -->|"unexpected JS error or DB crash"| CEH
 
-    IsOp -- Yes --> CEH["centralErrorHandler(err, req, res)"]
-    IsOp2 -- No --> CEH
-
+    CEH["centralErrorHandler err req res"]
     CEH --> GenId["requestId = randomUUID()"]
     GenId --> Check{{"err.isOperational?"}}
 
-    Check -- Yes --> WarnLog["logger.warn\n{requestId, method, url, status, message}"]
-    Check -- No  --> ErrLog["logger.error\n{requestId, method, url, status, err (full stack)}"]
+    Check -- Yes --> WarnLog["logger.warn requestId method url status message"]
+    Check -- No  --> ErrLog["logger.error requestId method url status full stack"]
 
-    WarnLog --> SafeMsg["message = err.message\n(safe to expose to client)"]
-    ErrLog  --> GenMsg["message = 'Internal server error'\n(stack never sent to client)"]
+    WarnLog --> SafeMsg["message = err.message safe to expose"]
+    ErrLog  --> GenMsg["message = Internal server error stack never sent"]
 
-    SafeMsg --> Send["sendJson(res, statusCode,\n{error: message, requestId})"]
+    SafeMsg --> Send["sendJson res statusCode error message requestId"]
     GenMsg  --> Send
 
-    Send --> Client["Client receives\n{success:false, error:'…', requestId:'uuid'}"]
+    Send --> Client["Client receives success=false error requestId"]
 
-    style IsOp2 fill:#c0392b,color:#fff
     style ErrLog fill:#c0392b,color:#fff
     style GenMsg fill:#c0392b,color:#fff
 ```
@@ -700,19 +697,16 @@ flowchart TD
 
 ```mermaid
 gantt
-    title Token / session lifetimes (not to scale)
-    dateFormat  X
-    axisFormat  %s
+    title Token and session lifetimes (not to scale)
+    dateFormat X
+    axisFormat %s
 
     section Bearer path
-    Access token (15 min)       : 0, 900
-    Refresh token (7 days)      : 0, 604800
+    Access token 15 min      : 0, 900
+    Refresh token 7 days     : 0, 604800
 
     section Cookie path
-    __Host-session cookie (8 h) : 0, 28800
-
-    section Limits
-    Max 2 concurrent sessions per user (all devices) : milestone, 0, 0
+    Session cookie 8 hours   : 0, 28800
 ```
 
 - **Access token** — stateless JWT-like HMAC token; no DB lookup on every request.
