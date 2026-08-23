@@ -1,0 +1,706 @@
+{
+  "info": {
+    "_postman_id": "474d0b5d-d0df-4ad7-b19a-3325b83b880b",
+    "name": "Secure File Drop",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "576455",
+    "_collection_link": "https://go.postman.co/collection/12092162-474d0b5d-d0df-4ad7-b19a-3325b83b880b?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "const enableBearer = pm.environment.get(\"ENABLE_BEARER\");",
+                  "",
+                  "if (enableBearer === \"true\") {",
+                  "    if (res.accessToken) {",
+                  "        pm.collectionVariables.set(\"accessToken\", res.accessToken);",
+                  "    }",
+                  "} else {",
+                  "    pm.collectionVariables.unset(\"accessToken\");",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          },
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-device-id",
+                "value": "windows_4",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"username\":\"ankitgupta2\",\r\n    \"password\": \"12345\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/api/auth/login",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Sign up",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"username\":\"ankitgupta3\",\r\n    \"password\": \"12345\",\r\n    \"role\":\"manager\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/api/auth/signup",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "signup"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Me",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "\r",
+                  "\r",
+                  "\r",
+                  "const accessToken = pm.collectionVariables.get(\"accessToken\");\r",
+                  "\r",
+                  "if (accessToken) {\r",
+                  "    console.log(\"accessToken\")\r",
+                  "    pm.request.headers.upsert({\r",
+                  "        key: \"Authorization\",\r",
+                  "        value: \"Bearer \" + accessToken\r",
+                  "    });\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://localhost:4433/api/users/me",
+              "protocol": "https",
+              "host": [
+                "localhost"
+              ],
+              "port": "4433",
+              "path": [
+                "api",
+                "users",
+                "me"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Logout",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "\r",
+                  "\r",
+                  "\r",
+                  "const accessToken = pm.collectionVariables.get(\"accessToken\");\r",
+                  "\r",
+                  "if (accessToken) {\r",
+                  "    console.log(\"accessToken\")\r",
+                  "    pm.request.headers.upsert({\r",
+                  "        key: \"Authorization\",\r",
+                  "        value: \"Bearer \" + accessToken\r",
+                  "    });\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"username\":\"ankitgupta\",\r\n    \"password\": \"12345\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://localhost:4433/api/auth/logout",
+              "protocol": "https",
+              "host": [
+                "localhost"
+              ],
+              "port": "4433",
+              "path": [
+                "api",
+                "auth",
+                "logout"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh Token",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"refreshToken\": \"eyJ1aWQiOiI2YTg5NWVkMzU4ZGFjM2FhODhmM2JlZDMiLCJkZXZpY2VJZCI6IndpbmRvd3NfMSIsInR5cGUiOiJyZWZyZXNoIiwiZXhwIjoxNzg4MDIxNzk3fQ.7DdYJRw8jZNlWs50b3orIyKPK5tPAuhFShRuDS39-9E\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://localhost:4433/api/auth/refresh",
+              "protocol": "https",
+              "host": [
+                "localhost"
+              ],
+              "port": "4433",
+              "path": [
+                "api",
+                "auth",
+                "refresh"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "User",
+      "item": [
+        {
+          "name": "Update User",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "\r",
+                  "\r",
+                  "\r",
+                  "const accessToken = pm.collectionVariables.get(\"accessToken\");\r",
+                  "\r",
+                  "if (accessToken) {\r",
+                  "    console.log(\"accessToken\")\r",
+                  "    pm.request.headers.upsert({\r",
+                  "        key: \"Authorization\",\r",
+                  "        value: \"Bearer \" + accessToken\r",
+                  "    });\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"role\":\"manager\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/api/users/6a8808efed6b7bf6c5e9518f",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "6a8808efed6b7bf6c5e9518f"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create User",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "\r",
+                  "\r",
+                  "\r",
+                  "const accessToken = pm.collectionVariables.get(\"accessToken\");\r",
+                  "\r",
+                  "if (accessToken) {\r",
+                  "    console.log(\"accessToken\")\r",
+                  "    pm.request.headers.upsert({\r",
+                  "        key: \"Authorization\",\r",
+                  "        value: \"Bearer \" + accessToken\r",
+                  "    });\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"username\":\"ankitgupta5\",\r\n    \"password\": \"12345\",\r\n    \"role\":\"manager\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/api/users",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "api",
+                "users"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List User",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "\r",
+                  "\r",
+                  "\r",
+                  "const accessToken = pm.collectionVariables.get(\"accessToken\");\r",
+                  "\r",
+                  "if (accessToken) {\r",
+                  "    console.log(\"accessToken\")\r",
+                  "    pm.request.headers.upsert({\r",
+                  "        key: \"Authorization\",\r",
+                  "        value: \"Bearer \" + accessToken\r",
+                  "    });\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/api/users",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "api",
+                "users"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "File",
+      "item": [
+        {
+          "name": "Upload File",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "\r",
+                  "\r",
+                  "\r",
+                  "const accessToken = pm.collectionVariables.get(\"accessToken\");\r",
+                  "\r",
+                  "if (accessToken) {\r",
+                  "    console.log(\"accessToken\")\r",
+                  "    pm.request.headers.upsert({\r",
+                  "        key: \"Authorization\",\r",
+                  "        value: \"Bearer \" + accessToken\r",
+                  "    });\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "meta",
+                  "value": "{\"filename\":\"notes.txt\",\"mimeType\":\"text/plain\",\"declaredSize\":1234}",
+                  "type": "text",
+                  "uuid": "98297a9d-315c-4774-ac1f-91a88149d5c8"
+                },
+                {
+                  "key": "file",
+                  "type": "file",
+                  "uuid": "7664bea3-14ef-4781-92aa-4603781ba93f",
+                  "src": "/C:/Users/JDT647/Downloads/CDE_Linux_Build_Manual (1).md"
+                },
+                {
+                  "key": "meta",
+                  "value": "{\"filename\":\"notwees.txt\",\"mimeType\":\"application/pdf\",\"declaredSize\":1264}",
+                  "type": "text",
+                  "uuid": "e8b5ed59-dc78-4655-9280-b81c945d9ee1"
+                },
+                {
+                  "key": "file",
+                  "type": "file",
+                  "uuid": "2b99bdf2-12ba-4730-a119-d54d0d490a83",
+                  "src": "/C:/Users/JDT647/Downloads/Challenging problem & solution.pdf"
+                }
+              ]
+            },
+            "url": {
+              "raw": "https://localhost:4433/api/files",
+              "protocol": "https",
+              "host": [
+                "localhost"
+              ],
+              "port": "4433",
+              "path": [
+                "api",
+                "files"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Share file",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "\r",
+                  "\r",
+                  "\r",
+                  "const accessToken = pm.collectionVariables.get(\"accessToken\");\r",
+                  "\r",
+                  "if (accessToken) {\r",
+                  "    console.log(\"accessToken\")\r",
+                  "    pm.request.headers.upsert({\r",
+                  "        key: \"Authorization\",\r",
+                  "        value: \"Bearer \" + accessToken\r",
+                  "    });\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"expiresInSeconds\": 60}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://localhost:4433/api/files/6a8a180397df5d33a46c5653/share",
+              "protocol": "https",
+              "host": [
+                "localhost"
+              ],
+              "port": "4433",
+              "path": [
+                "api",
+                "files",
+                "6a8a180397df5d33a46c5653",
+                "share"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Download File",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "const accessToken = pm.collectionVariables.get(\"accessToken\");",
+                  "if (accessToken) {",
+                  "    pm.request.headers.upsert({",
+                  "        key: \"Authorization\",",
+                  "        value: \"Bearer \" + accessToken",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://localhost:4433/api/share/eyJmaWxlSWQiOiI2YTg5NjQ5M2JlZmViMGFlZWNlN2I1MDQiLCJ0b2tlbklkIjoiMDFlMDk4OTEtNmRjMi00YmI3LTkxNWUtYjgxYmYzNzc2NDllIiwiZXhwIjoxNzg3MzkxMTU0fQ.k3dDI9BRmhv8XvtRxzcVhTUk8D0emFT-17WTlygwKJE",
+              "protocol": "https",
+              "host": [
+                "localhost"
+              ],
+              "port": "4433",
+              "path": [
+                "api",
+                "share",
+                "eyJmaWxlSWQiOiI2YTg5NjQ5M2JlZmViMGFlZWNlN2I1MDQiLCJ0b2tlbklkIjoiMDFlMDk4OTEtNmRjMi00YmI3LTkxNWUtYjgxYmYzNzc2NDllIiwiZXhwIjoxNzg3MzkxMTU0fQ.k3dDI9BRmhv8XvtRxzcVhTUk8D0emFT-17WTlygwKJE"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List Files",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "\r",
+                  "\r",
+                  "\r",
+                  "const accessToken = pm.collectionVariables.get(\"accessToken\");\r",
+                  "\r",
+                  "if (accessToken) {\r",
+                  "    console.log(\"accessToken\")\r",
+                  "    pm.request.headers.upsert({\r",
+                  "        key: \"Authorization\",\r",
+                  "        value: \"Bearer \" + accessToken\r",
+                  "    });\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://localhost:4433/api/files",
+              "protocol": "https",
+              "host": [
+                "localhost"
+              ],
+              "port": "4433",
+              "path": [
+                "api",
+                "files"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete File",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "\r",
+                  "\r",
+                  "\r",
+                  "const accessToken = pm.collectionVariables.get(\"accessToken\");\r",
+                  "\r",
+                  "if (accessToken) {\r",
+                  "    console.log(\"accessToken\")\r",
+                  "    pm.request.headers.upsert({\r",
+                  "        key: \"Authorization\",\r",
+                  "        value: \"Bearer \" + accessToken\r",
+                  "    });\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "Revoke Token",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "\r",
+                  "\r",
+                  "\r",
+                  "const accessToken = pm.collectionVariables.get(\"accessToken\");\r",
+                  "\r",
+                  "if (accessToken) {\r",
+                  "    console.log(\"accessToken\")\r",
+                  "    pm.request.headers.upsert({\r",
+                  "        key: \"Authorization\",\r",
+                  "        value: \"Bearer \" + accessToken\r",
+                  "    });\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/api/files/6a8a0ab4e90d76a1fa75f679/share/707ec519-f22f-4add-a122-388aed35f9d8",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "api",
+                "files",
+                "6a8a0ab4e90d76a1fa75f679",
+                "share",
+                "707ec519-f22f-4add-a122-388aed35f9d8"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "authCookie",
+      "value": ""
+    }
+  ]
+}
