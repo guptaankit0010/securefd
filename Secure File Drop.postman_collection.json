@@ -59,7 +59,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\r\n    \"username\":\"ankitgupta2\",\r\n    \"password\": \"12345\"\r\n}",
+              "raw": "{\r\n    \"username\":\"ankitgupta\",\r\n    \"password\": \"12345\"\r\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -87,7 +87,7 @@
             "header": [],
             "body": {
               "mode": "raw",
-              "raw": "{\r\n    \"username\":\"ankitgupta3\",\r\n    \"password\": \"12345\",\r\n    \"role\":\"manager\"\r\n}",
+              "raw": "{\r\n    \"username\":\"ankitgupta6\",\r\n    \"password\": \"12345\",\r\n    \"role\":\"admin\"\r\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -517,7 +517,7 @@
               }
             },
             "url": {
-              "raw": "https://localhost:4433/api/files/6a8a180397df5d33a46c5653/share",
+              "raw": "https://localhost:4433/api/files/6a8b3219c20d3c5dc9b5ed59/share",
               "protocol": "https",
               "host": [
                 "localhost"
@@ -526,7 +526,7 @@
               "path": [
                 "api",
                 "files",
-                "6a8a180397df5d33a46c5653",
+                "6a8b3219c20d3c5dc9b5ed59",
                 "share"
               ]
             }
@@ -558,7 +558,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "https://localhost:4433/api/share/eyJmaWxlSWQiOiI2YTg5NjQ5M2JlZmViMGFlZWNlN2I1MDQiLCJ0b2tlbklkIjoiMDFlMDk4OTEtNmRjMi00YmI3LTkxNWUtYjgxYmYzNzc2NDllIiwiZXhwIjoxNzg3MzkxMTU0fQ.k3dDI9BRmhv8XvtRxzcVhTUk8D0emFT-17WTlygwKJE",
+              "raw": "https://localhost:4433/api/share/eyJmaWxlSWQiOiI2YThiMzIxOWMyMGQzYzVkYzliNWVkNTkiLCJ0b2tlbklkIjoiNWIzNGRjMTAtOGJlNC00N2M0LWJkMTAtMzRmMWM1MzA1MGJhIiwiZXhwIjoxNzg3NTA4Mzc0fQ.GmGiESf7Ry2hMAjDzTVk44itJ4tEywwJzCu4EhDAnpU",
               "protocol": "https",
               "host": [
                 "localhost"
@@ -567,7 +567,7 @@
               "path": [
                 "api",
                 "share",
-                "eyJmaWxlSWQiOiI2YTg5NjQ5M2JlZmViMGFlZWNlN2I1MDQiLCJ0b2tlbklkIjoiMDFlMDk4OTEtNmRjMi00YmI3LTkxNWUtYjgxYmYzNzc2NDllIiwiZXhwIjoxNzg3MzkxMTU0fQ.k3dDI9BRmhv8XvtRxzcVhTUk8D0emFT-17WTlygwKJE"
+                "eyJmaWxlSWQiOiI2YThiMzIxOWMyMGQzYzVkYzliNWVkNTkiLCJ0b2tlbklkIjoiNWIzNGRjMTAtOGJlNC00N2M0LWJkMTAtMzRmMWM1MzA1MGJhIiwiZXhwIjoxNzg3NTA4Mzc0fQ.GmGiESf7Ry2hMAjDzTVk44itJ4tEywwJzCu4EhDAnpU"
               ]
             }
           },
@@ -618,7 +618,7 @@
           "response": []
         },
         {
-          "name": "Delete File",
+          "name": "Active Tokens",
           "event": [
             {
               "listen": "prerequest",
@@ -645,7 +645,64 @@
           ],
           "request": {
             "method": "GET",
-            "header": []
+            "header": [],
+            "url": {
+              "raw": "https://localhost:4433/api/files/6a8b3219c20d3c5dc9b5ed59/share",
+              "protocol": "https",
+              "host": [
+                "localhost"
+              ],
+              "port": "4433",
+              "path": [
+                "api",
+                "files",
+                "6a8b3219c20d3c5dc9b5ed59",
+                "share"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete File",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "\r",
+                  "\r",
+                  "\r",
+                  "const accessToken = pm.collectionVariables.get(\"accessToken\");\r",
+                  "\r",
+                  "if (accessToken) {\r",
+                  "    console.log(\"accessToken\")\r",
+                  "    pm.request.headers.upsert({\r",
+                  "        key: \"Authorization\",\r",
+                  "        value: \"Bearer \" + accessToken\r",
+                  "    });\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/api/files/6a8b3219c20d3c5dc9b5ed59",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "api",
+                "files",
+                "6a8b3219c20d3c5dc9b5ed59"
+              ]
+            }
           },
           "response": []
         },
@@ -679,16 +736,16 @@
             "method": "DELETE",
             "header": [],
             "url": {
-              "raw": "{{BASE_URL}}/api/files/6a8a0ab4e90d76a1fa75f679/share/707ec519-f22f-4add-a122-388aed35f9d8",
+              "raw": "{{BASE_URL}}/api/files/6a8b3219c20d3c5dc9b5ed59/share/7271972a-8e0f-4fb3-b569-1f945b01a96c",
               "host": [
                 "{{BASE_URL}}"
               ],
               "path": [
                 "api",
                 "files",
-                "6a8a0ab4e90d76a1fa75f679",
+                "6a8b3219c20d3c5dc9b5ed59",
                 "share",
-                "707ec519-f22f-4add-a122-388aed35f9d8"
+                "7271972a-8e0f-4fb3-b569-1f945b01a96c"
               ]
             }
           },
