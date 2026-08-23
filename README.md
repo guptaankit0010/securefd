@@ -289,16 +289,37 @@ POST /api/files/:fileId/share
 ```
 `expiresInSeconds` must be between 60 (1 minute) and 604800 (7 days).
 
-Response includes:
+Response includes `tokenId` — **store it** if you need to revoke the link later:
 ```json
 {
   "success": true,
   "data": {
     "token": "eyJ...",
+    "tokenId": "5b61efda-2b58-4247-b541-fdd6b37c8d15",
     "shareUrl": "https://localhost:4433/api/share/eyJ..."
   }
 }
 ```
+
+#### List active share tokens for a file
+```
+GET /api/files/:fileId/share
+```
+- **admin**: lists tokens for any file
+- **manager / viewer**: only for files they own
+
+Response:
+```json
+{
+  "success": true,
+  "data": {
+    "tokens": [
+      { "tokenId": "5b61efda-...", "expiresAt": "2026-08-24T...", "createdAt": "2026-08-23T..." }
+    ]
+  }
+}
+```
+Use this endpoint to retrieve `tokenId`s if you did not persist them at creation time.
 
 #### Download via share link *(public — no auth required)*
 ```
@@ -306,10 +327,12 @@ GET /api/share/<token>
 ```
 Returns the decrypted file as a download. The link expires at the time specified when it was created. No login needed — anyone with the link can download the file until it expires.
 
-#### Revoke a share link *(owner only)*
+#### Revoke a share link
 ```
 DELETE /api/files/:fileId/share/:tokenId
 ```
+- **admin**: can revoke tokens on any file (`file:delete` scope)
+- **file owner**: can revoke tokens on their own files (`file:delete` scope)
 
 ---
 
@@ -397,7 +420,7 @@ graph LR
         ShareCtrl --> ShareSvc["api/share/ShareService.js"]
     end
 
-    subgraph Models["Mongoose models"]
+    subgraph Models["Schema definitions (plain JS objects)"]
         UserModel["UserModel\nusername · password(hash) · role · isDeleted"]
         SessionModel["SessionModel\nowner · deviceId · tokenHash · expiresAt · isRevoked"]
         FileModel["FileModel\nowner · filename · storageName · iv · authTag · isDeleted"]
@@ -773,18 +796,26 @@ erDiagram
 
 ## Environment variables reference
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `PORT` | No | Port to listen on (default: `4433`) |
-| `MONGODB_URI` | Yes | MongoDB connection string |
-| `SESSION_SECRET` | Yes | 64-char hex — signs session and access/refresh tokens |
-| `SHARE_TOKEN_SECRET` | Yes | 64-char hex — signs share link tokens |
-| `FILE_ENCRYPTION_KEY` | Yes | 64-char hex — AES-256-GCM key for file encryption |
-| `STORAGE_DIR` | Yes | Path to directory where encrypted files are stored |
-| `MAX_FILE_SIZE_BYTES` | Yes | Maximum upload size in bytes (e.g. `5242880` = 5 MB) |
-| `ALLOWED_ORIGIN` | No | CORS allowed origin (default: `https://localhost:3000`) |
-| `SERVER_BASE_URL` | No | Base URL used in share links (default: `https://localhost:<PORT>`) |
-| `LOG_LEVEL` | No | Log verbosity: `DEBUG`, `INFO`, `WARN`, `ERROR` (default: `DEBUG` in dev, `INFO` in prod) |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PORT` | No | `4433` | Port to listen on |
+| `MONGODB_URI` | Yes | — | MongoDB connection string |
+| `SESSION_SECRET` | Yes | — | 64-char hex — signs session and access/refresh tokens |
+| `SHARE_TOKEN_SECRET` | Yes | — | 64-char hex — signs share link tokens |
+| `FILE_ENCRYPTION_KEY` | Yes | — | 64-char hex — AES-256-GCM key for file encryption |
+| `STORAGE_DIR` | Yes | — | Path to directory where encrypted files are stored |
+| `MAX_FILE_SIZE_BYTES` | Yes | — | Maximum upload size in bytes (e.g. `5242880` = 5 MB) |
+| `ALLOWED_ORIGIN` | No | `https://localhost:3000` | CORS allowed origin |
+| `SERVER_BASE_URL` | No | `https://localhost:<PORT>` | Base URL used in share links |
+| `LOG_LEVEL` | No | `DEBUG` (dev) / `INFO` (prod) | Log verbosity: `DEBUG`, `INFO`, `WARN`, `ERROR` |
+| `COOKIE_TTL_SECONDS` | No | `28800` (8 h) | Lifetime of the `__Host-session` cookie |
+| `ACCESS_TTL_SECONDS` | No | `900` (15 min) | Lifetime of a Bearer access token |
+| `REFRESH_TTL_SECONDS` | No | `604800` (7 d) | Lifetime of a Bearer refresh token |
+| `MAX_SESSIONS` | No | `2` | Max concurrent active sessions per user |
+| `MAX_FILES_PER_UPLOAD` | No | `10` | Max files per multipart upload request |
+| `SHARE_TOKEN_MIN_EXPIRY` | No | `60` | Minimum share token expiry (seconds) |
+| `SHARE_TOKEN_MAX_EXPIRY` | No | `604800` | Maximum share token expiry (seconds) |
+| `SHUTDOWN_TIMEOUT_MS` | No | `10000` | Grace period before force-closing active streams on shutdown |
 
 ---
 
@@ -824,3 +855,69 @@ erDiagram
 ├── .env               Secret configuration (git-ignored)
 └── server.js          Entry point — HTTPS server + MongoDB connect
 ```
+
+---
+
+## Indexes
+
+Every query-hot field has an index created automatically at startup via `ensureIndexes()` in `lib/db.js`.
+
+| Collection | Index | Type | Helps |
+|------------|-------|------|-------|
+| `users` | `{ username: 1 }` | unique | O(log n) login lookup; duplicate-username rejection |
+| `sessions` | `{ owner: 1, deviceId: 1 }` | unique | Session upsert on every login / refresh with no full scan |
+| `sessions` | `{ owner: 1, isRevoked: 1, expiresAt: 1 }` | compound | `enforceSessionLimit` avoids a full collection scan |
+| `files` | `{ owner: 1, isDeleted: 1 }` | compound | File list filtered by owner without collection scan |
+| `sharetokens` | `{ tokenId: 1 }` | unique | O(1) token resolve; prevents duplicate token IDs |
+| `sharetokens` | `{ file: 1, revoked: 1, expiresAt: 1 }` | compound | Active-share check when building the file list |
+
+---
+
+## Sharding guidance
+
+> This project runs fine on a single-node replica set. The table below is informational — it shows what shard keys to choose if you ever need to scale horizontally.
+
+| Collection | Shard key | Reason |
+|------------|-----------|--------|
+| `users` | `{ _id: "hashed" }` | Even distribution; ID is the primary lookup key |
+| `sessions` | `{ owner: 1, deviceId: 1 }` | Matches the unique index; no scatter-gather on session upsert |
+| `files` | `{ owner: "hashed" }` | A given user's files stay on one shard |
+| `sharetokens` | `{ file: 1 }` | Tokens are co-located with their parent file |
+
+---
+
+## Session cookies vs Bearer access tokens — security perspective
+
+Both authentication methods are supported simultaneously. Here is why each exists and what protects it.
+
+### Session cookie (`__Host-session`)
+
+| Property | Value | Why it matters |
+|----------|-------|----------------|
+| `HttpOnly` | ✓ | JavaScript (including XSS payloads) cannot read the cookie value |
+| `Secure` | ✓ | Cookie is never sent over plain HTTP — HTTPS only |
+| `SameSite=Strict` | ✓ | Cookie is not sent on cross-site requests, blocking CSRF attacks |
+| `__Host-` prefix | ✓ | Browser enforces `Secure` and `Path=/`; cookie cannot be scoped to a subdomain |
+| Lifetime | 8 hours | Short enough to limit the exposure window if a cookie is somehow leaked |
+
+The cookie contains a **signed, time-limited HMAC token** (not a session ID). The server is stateless on the cookie path — no DB lookup is needed to verify a cookie request.
+
+### Bearer access token
+
+| Property | Value | Why it matters |
+|----------|-------|----------------|
+| Lifetime | 15 minutes | Even if a token is intercepted, it expires quickly |
+| Signed with HMAC-SHA256 | ✓ | Cannot be forged without `SESSION_SECRET` |
+| Carries `uid`, `role`, `scopes`, `deviceId` | ✓ | No DB lookup needed on each request (stateless) |
+| Transmitted in header, not cookie | ✓ | Not affected by CSRF; mobile/SPA clients can store it in memory |
+
+### Refresh token
+
+| Property | Value | Why it matters |
+|----------|-------|----------------|
+| Lifetime | 7 days | Long-lived so users are not constantly re-logging in |
+| DB-backed (hash stored in `sessions`) | ✓ | Can be revoked immediately; never stored in plain text |
+| Rotated on every use | ✓ | If a refresh token is stolen and used by an attacker, the legitimate client's next refresh detects a hash mismatch |
+| Reuse triggers global revocation | ✓ | The server immediately revokes **all** sessions for that user — breach response |
+| SHA-256 hash stored (not token itself) | ✓ | A DB breach does not expose usable tokens |
+

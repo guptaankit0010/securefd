@@ -1,25 +1,24 @@
 'use strict';
 
-// Token lifetimes in seconds
-const COOKIE_TTL = 8 * 60 * 60;      // 8 hours   (cookie / legacy path)
-const ACCESS_TTL = 15 * 60;          // 15 minutes (Bearer access token)
-const REFRESH_TTL = 7 * 24 * 60 * 60; // 7 days    (Bearer refresh token)
+const env = require('./env');
+
+// Token lifetimes — values come from .env (COOKIE_TTL_SECONDS, ACCESS_TTL_SECONDS, REFRESH_TTL_SECONDS)
+const COOKIE_TTL  = env.cookieTtl;
+const ACCESS_TTL  = env.accessTtl;
+const REFRESH_TTL = env.refreshTtl;
 
 // Role → scope mapping (ABAC)
-// manager : full file access
-// admin   : read + write, but NOT delete
-// viewer  : read-only
 const ROLE_SCOPES = {
   manager: ['file:read', 'file:write', 'file:delete'],
-  admin: ['file:read', 'file:write', 'file:delete'],
-  viewer: ['file:read'],
+  admin:   ['file:read', 'file:write', 'file:delete'],
+  viewer:  ['file:read'],
 };
 
 function getScopesForRole(role) {
   return ROLE_SCOPES[role] || ['file:read'];
 }
 
-// Max concurrent active sessions per user (Bearer + cookie, all devices combined)
-const MAX_SESSIONS = 2;
+// Max concurrent active sessions per user — value comes from .env (MAX_SESSIONS)
+const MAX_SESSIONS = env.maxSessions;
 
 module.exports = { COOKIE_TTL, ACCESS_TTL, REFRESH_TTL, ROLE_SCOPES, getScopesForRole, MAX_SESSIONS };

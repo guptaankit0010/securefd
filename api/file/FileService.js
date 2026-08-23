@@ -7,6 +7,7 @@ const { createEncryptStream } = require('../../lib/crypto/fileCrypto');
 const { AppError } = require('../../middleware/errorHandler');
 const { assertSafePath } = require('../../lib/validation/sanitize');
 const { validate, SCHEMAS } = require('../../lib/validation/schemas');
+const { insertDoc }         = require('../../lib/db');
 const FileModel = require('./FileModel');
 const env    = require('../../config/env');
 const logger = require('../../lib/logger');
@@ -55,7 +56,7 @@ function matchesDeclaredType(chunk, mimeType) {
 }
 
 // cap on how many (meta, file) pairs a single upload request may contain
-const MAX_FILES_PER_UPLOAD = 10;
+const MAX_FILES_PER_UPLOAD = env.maxFilesPerUpload;
 
 // Uploads one or more files from a single multipart request. Each file part must be
 // preceded by its own `meta` field (same "meta must precede file" contract as before,
@@ -171,7 +172,7 @@ async function uploadFile(req, ownerId) {
       dest.on('finish', async () => {
         if (settledThisFile) return;
         try {
-          const file = await FileModel.create({
+          const file = await insertDoc(FileModel, {
             owner: ownerId, filename: meta.filename, storageName,
             mimeType: meta.mimeType, size: bytesWritten, iv, authTag: getAuthTag(),
           });

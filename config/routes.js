@@ -31,6 +31,7 @@ const routes = [
 
   // Scope-guarded sharing operations
   { path: '/api/files/:fileId/share',          method: 'POST',   handlers: [requireAuth, requireScope('file:write'),  ShareCtrl.create] },
+  { path: '/api/files/:fileId/share',          method: 'GET',    handlers: [requireAuth, requireScope('file:read'),   ShareCtrl.list] },
   { path: '/api/files/:fileId/share/:tokenId', method: 'DELETE', handlers: [requireAuth, requireScope('file:delete'), ShareCtrl.revoke] },
   { path: '/api/share/:token',                 method: 'GET',    handlers: [ShareCtrl.download] },
 ];

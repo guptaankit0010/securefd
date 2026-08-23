@@ -3,7 +3,7 @@ process.loadEnvFile(); // native .env loader (Node >= 20.6) — must be first li
 
 const https    = require('node:https');
 const fs       = require('node:fs');
-const mongoose = require('mongoose');
+const db       = require('./lib/db');
 const env      = require('./config/env');
 const { Router }              = require('./lib/router');
 const { centralErrorHandler } = require('./middleware/errorHandler');
@@ -24,7 +24,7 @@ const server = https.createServer(sslOptions, async (req, res) => {
   await router.handle(req, res).catch(err => centralErrorHandler(err, req, res));
 });
 
-mongoose.connect(env.mongoUri).then(() => {
+db.connect(env.mongoUri).then(() => {
   server.listen(env.port, 'localhost', () =>
     logger.info('server started', { url: `https://localhost:${env.port}` })
   );

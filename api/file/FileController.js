@@ -1,23 +1,27 @@
 'use strict';
+
 const { sendJson } = require('../../lib/http');
 const { AppError } = require('../../middleware/errorHandler');
 const { signToken } = require('../../lib/crypto/tokens');
 const FileService  = require('./FileService');
 const FileModel    = require('./FileModel');
 const ShareModel   = require('../share/ShareModel');
+const { getCollection, toObjectId } = require('../../lib/db');
+const { prepareSet }                = require('../../lib/validation/schemas');
 const env    = require('../../config/env');
 const logger = require('../../lib/logger');
 
-const FILE_PROJECTION = '-iv -authTag -storageName';
+// Projection that omits sensitive storage fields from API responses
+const FILE_PROJECTION = { iv: 0, authTag: 0, storageName: 0 };
 
 // Fetches all active (non-revoked, non-expired) share tokens and builds:
-//   shareMap:     fileId (string) → signed token string
+//   shareMap:      fileId (string) → signed token string
 //   sharedFileIds: array of ObjectIds for use in queries
 async function buildShareMap() {
   const now = new Date();
-  const activeShares = await ShareModel.find(
-    { revoked: false, expiresAt: { $gt: now } }
-  ).lean();
+  const activeShares = await getCollection(ShareModel.collection)
+    .find({ revoked: false, expiresAt: { $gt: now } })
+    .toArray();
 
   const shareMap = {};
   for (const share of activeShares) {
@@ -37,7 +41,6 @@ async function buildShareMap() {
 }
 
 // Attaches shareUrl to each file object that has an entry in shareMap.
-// shareUrl expires at the same instant as the original share token.
 function attachShareUrls(files, shareMap) {
   return files.map(f => {
     const token = shareMap[f._id.toString()];
@@ -65,14 +68,17 @@ async function list(req, res) {
 
   let rawFiles;
   if (req.user.role === 'admin') {
-    // Admin sees all non-deleted files
-    rawFiles = await FileModel.find({ isDeleted: false }).select(FILE_PROJECTION).lean();
+    rawFiles = await getCollection(FileModel.collection)
+      .find({ isDeleted: false }, { projection: FILE_PROJECTION })
+      .toArray();
   } else {
-    // Manager / Viewer: own non-deleted files + non-deleted files with active share tokens
-    rawFiles = await FileModel.find({
-      isDeleted: false,
-      $or: [{ owner: req.user.uid }, { _id: { $in: sharedFileIds } }],
-    }).select(FILE_PROJECTION).lean();
+    const ownerOid = toObjectId(req.user.uid);
+    rawFiles = await getCollection(FileModel.collection)
+      .find(
+        { isDeleted: false, $or: [{ owner: ownerOid }, { _id: { $in: sharedFileIds } }] },
+        { projection: FILE_PROJECTION }
+      )
+      .toArray();
   }
 
   const files = attachShareUrls(rawFiles, shareMap);
@@ -81,12 +87,14 @@ async function list(req, res) {
 
 async function getOne(req, res) {
   const { fileId } = req.params;
+  const fileOid    = toObjectId(fileId);
+  const fileCol    = getCollection(FileModel.collection);
+  const shareCol   = getCollection(ShareModel.collection);
 
   if (req.user.role === 'admin') {
-    const file = await FileModel.findOne({ _id: fileId, isDeleted: false }).select(FILE_PROJECTION).lean();
+    const file = await fileCol.findOne({ _id: fileOid, isDeleted: false }, { projection: FILE_PROJECTION });
     if (!file) throw new AppError('File not found', 404);
 
-    // Attach shareUrl if there is an active share token for this file
     const { shareMap } = await buildShareMap();
     const [result] = attachShareUrls([file], shareMap);
     return sendJson(res, 200, { file: result });
@@ -94,12 +102,13 @@ async function getOne(req, res) {
 
   // Manager / Viewer: own file, or accessible via active share token
   const now = new Date();
-  let file = await FileModel.findOne({ _id: fileId, owner: req.user.uid, isDeleted: false })
-    .select(FILE_PROJECTION).lean();
+  let file = await fileCol.findOne(
+    { _id: fileOid, owner: toObjectId(req.user.uid), isDeleted: false },
+    { projection: FILE_PROJECTION }
+  );
 
   if (file) {
-    // Owned — check for a shareUrl to include
-    const activeShare = await ShareModel.findOne({ file: fileId, revoked: false, expiresAt: { $gt: now } }).lean();
+    const activeShare = await shareCol.findOne({ file: fileOid, revoked: false, expiresAt: { $gt: now } });
     if (activeShare) {
       const exp   = Math.floor(activeShare.expiresAt.getTime() / 1000);
       const token = await signToken({ fileId, tokenId: activeShare.tokenId, exp }, env.shareTokenSecret);
@@ -109,10 +118,10 @@ async function getOne(req, res) {
   }
 
   // Not owned — check if accessible via share token
-  const activeShare = await ShareModel.findOne({ file: fileId, revoked: false, expiresAt: { $gt: now } }).lean();
+  const activeShare = await shareCol.findOne({ file: fileOid, revoked: false, expiresAt: { $gt: now } });
   if (!activeShare) throw new AppError('File not found', 404);
 
-  file = await FileModel.findOne({ _id: fileId, isDeleted: false }).select(FILE_PROJECTION).lean();
+  file = await fileCol.findOne({ _id: fileOid, isDeleted: false }, { projection: FILE_PROJECTION });
   if (!file) throw new AppError('File not found', 404);
 
   const exp   = Math.floor(activeShare.expiresAt.getTime() / 1000);
@@ -121,14 +130,15 @@ async function getOne(req, res) {
 }
 
 async function remove(req, res) {
-  // Only the file owner can delete; admin has no file:delete scope (blocked by requireScope upstream)
-  const file = await FileModel.findOne({ _id: req.params.fileId, owner: req.user.uid, isDeleted: false });
+  const fileOid = toObjectId(req.params.fileId);
+  const fileCol = getCollection(FileModel.collection);
+
+  const file = await fileCol.findOne({ _id: fileOid, owner: toObjectId(req.user.uid), isDeleted: false });
   if (!file) throw new AppError('File not found', 404);
 
-  await FileModel.updateOne({ _id: file._id }, { isDeleted: true });
-  await ShareModel.updateMany({ file: file._id }, { revoked: true });
-  logger.info('file soft-deleted', { fileId: file._id, filename: file.filename, uid: req.user.uid });
-  // Physical blob stays on disk (encrypted at rest); eligible for a future cleanup job
+  await fileCol.updateOne({ _id: fileOid }, prepareSet(FileModel, { isDeleted: true }));
+  await getCollection(ShareModel.collection).updateMany({ file: fileOid }, prepareSet(ShareModel, { revoked: true }));
+  logger.info('file soft-deleted', { fileId: fileOid, filename: file.filename, uid: req.user.uid });
   sendJson(res, 200, { message: 'File deleted' });
 }
 

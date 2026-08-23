@@ -1,11 +1,12 @@
 'use strict';
-const mongoose = require('mongoose');
 
-const shareSchema = new mongoose.Schema({
-  file:      { type: mongoose.Schema.Types.ObjectId, ref: 'File', required: true },
-  tokenId:   { type: String, required: true, unique: true }, // UUID embedded in signed payload
-  expiresAt: { type: Date, required: true },
-  revoked:   { type: Boolean, default: false },
-}, { timestamps: true });
-
-module.exports = mongoose.model('ShareToken', shareSchema);
+module.exports = {
+  collection: 'sharetokens',
+  timestamps: true,
+  fields: {
+    file:      { type: 'objectId', required: true },
+    tokenId:   { type: 'string',   required: true },
+    expiresAt: { type: 'date',     required: true },
+    revoked:   { type: 'boolean',  default: false },
+  },
+};
