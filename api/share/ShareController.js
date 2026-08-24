@@ -2,7 +2,7 @@
 
 const fs   = require('node:fs');
 const path = require('node:path');
-const { readJsonBody, sendJson } = require('../../lib/http');
+const { readJsonBody, sendJson, parsePagination } = require('../../lib/http');
 const { validate, SCHEMAS } = require('../../lib/validation/schemas');
 const { trackStream } = require('../../lib/shutdown');
 const { createDecryptStream } = require('../../lib/crypto/fileCrypto');
@@ -23,10 +23,11 @@ async function create(req, res) {
 }
 
 async function list(req, res) {
-  const tokens = await ShareService.listShareTokens(
-    req.params.fileId, req.user.uid, req.user.role
+  const pagination = parsePagination(req, env.maxPageSize);
+  const result = await ShareService.listShareTokens(
+    req.params.fileId, req.user.uid, req.user.role, pagination
   );
-  sendJson(res, 200, { tokens });
+  sendJson(res, 200, result);
 }
 
 async function revoke(req, res) {

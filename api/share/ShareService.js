@@ -49,7 +49,7 @@ async function resolveShareToken(rawToken) {
 
 // Lists all active (non-revoked, non-expired) share tokens for a file.
 // Admins can list tokens for any file; others must own the file.
-async function listShareTokens(fileId, userId, role) {
+async function listShareTokens(fileId, userId, role, { page, limit, skip }) {
   const fileOid = toObjectId(fileId);
   const fileCol = getCollection(FileModel.collection);
   const filter  = role === 'admin'
@@ -59,16 +59,20 @@ async function listShareTokens(fileId, userId, role) {
   const file = await fileCol.findOne(filter);
   if (!file) throw new AppError('File not found', 404);
 
-  const now    = new Date();
-  const tokens = await getCollection(ShareModel.collection)
-    .find(
-      { file: fileOid, revoked: false, expiresAt: { $gt: now } },
-      { projection: { tokenId: 1, expiresAt: 1, createdAt: 1, _id: 0 } }
-    )
-    .sort({ createdAt: -1 })
-    .toArray();
+  const now        = new Date();
+  const shareCol   = getCollection(ShareModel.collection);
+  const tokenFilter = { file: fileOid, revoked: false, expiresAt: { $gt: now } };
+  const [tokens, total] = await Promise.all([
+    shareCol
+      .find(tokenFilter, { projection: { tokenId: 1, expiresAt: 1, createdAt: 1, _id: 0 } })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray(),
+    shareCol.countDocuments(tokenFilter),
+  ]);
 
-  return tokens;
+  return { tokens, total, page, limit, pages: Math.ceil(total / limit) };
 }
 
 // Revokes a share token.

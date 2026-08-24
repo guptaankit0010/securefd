@@ -1,8 +1,9 @@
 'use strict';
-const { readJsonBody, sendJson } = require('../../lib/http');
+const { readJsonBody, sendJson, parsePagination } = require('../../lib/http');
 const { sanitizeBody } = require('../../lib/validation/sanitize');
 const { validate, SCHEMAS } = require('../../lib/validation/schemas');
 const UserService = require('./UserService');
+const env = require('../../config/env');
 
 async function getMe(req, res) {
   const { uid, role, scopes } = req.user;
@@ -10,8 +11,9 @@ async function getMe(req, res) {
 }
 
 async function listUsers(req, res) {
-  const users = await UserService.listUsers();
-  sendJson(res, 200, { users });
+  const pagination = parsePagination(req, env.maxPageSize);
+  const result = await UserService.listUsers(pagination);
+  sendJson(res, 200, result);
 }
 
 async function createUser(req, res) {

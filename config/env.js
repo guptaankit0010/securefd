@@ -34,4 +34,7 @@ module.exports = {
 
   // Graceful shutdown drain timeout (ms)
   shutdownTimeoutMs: Number(process.env.SHUTDOWN_TIMEOUT_MS) || 10_000,
+
+  // Pagination
+  maxPageSize: Number(process.env.MAX_PAGE_SIZE) || 100,
 };

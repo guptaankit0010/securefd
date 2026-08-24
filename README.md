@@ -816,6 +816,7 @@ erDiagram
 | `SHARE_TOKEN_MIN_EXPIRY` | No | `60` | Minimum share token expiry (seconds) |
 | `SHARE_TOKEN_MAX_EXPIRY` | No | `604800` | Maximum share token expiry (seconds) |
 | `SHUTDOWN_TIMEOUT_MS` | No | `10000` | Grace period before force-closing active streams on shutdown |
+| `MAX_PAGE_SIZE` | No | `100` | Maximum items per page across all paginated list endpoints |
 
 ---
 
@@ -867,9 +868,11 @@ Every query-hot field has an index created automatically at startup via `ensureI
 | `users` | `{ username: 1 }` | unique | O(log n) login lookup; duplicate-username rejection |
 | `sessions` | `{ owner: 1, deviceId: 1 }` | unique | Session upsert on every login / refresh with no full scan |
 | `sessions` | `{ owner: 1, isRevoked: 1, expiresAt: 1 }` | compound | `enforceSessionLimit` avoids a full collection scan |
+| `sessions` | `{ expiresAt: 1 }` | TTL | Auto-deletes expired session documents (`expireAfterSeconds: 0`) |
 | `files` | `{ owner: 1, isDeleted: 1 }` | compound | File list filtered by owner without collection scan |
 | `sharetokens` | `{ tokenId: 1 }` | unique | O(1) token resolve; prevents duplicate token IDs |
 | `sharetokens` | `{ file: 1, revoked: 1, expiresAt: 1 }` | compound | Active-share check when building the file list |
+| `sharetokens` | `{ expiresAt: 1 }` | TTL | Auto-deletes expired share token documents (`expireAfterSeconds: 0`) |
 
 ---
 

@@ -15,12 +15,15 @@ const logger                           = require('../../lib/logger');
 
 async function signup({ username, password, role = 'viewer' }) {
   if (!validateUsername(username)) throw new AppError('Invalid username format', 400);
-  const col = getCollection(UserModel.collection);
-  if (await col.findOne({ username })) throw new AppError('Username taken', 409);
   const hashed = await hashPassword(password);
-  const user   = await insertDoc(UserModel, { username, password: hashed, role });
-  logger.info('user signed up', { username: user.username, role: user.role, uid: user._id });
-  return { id: user._id, username: user.username, role: user.role, scopes: getScopesForRole(user.role) };
+  try {
+    const user = await insertDoc(UserModel, { username, password: hashed, role });
+    logger.info('user signed up', { username: user.username, role: user.role, uid: user._id });
+    return { id: user._id, username: user.username, role: user.role, scopes: getScopesForRole(user.role) };
+  } catch (e) {
+    if (e.code === 11000) throw new AppError('Username taken', 409);
+    throw e;
+  }
 }
 
 // Unified login — verifies credentials once, issues both a cookie token (browser)
@@ -121,24 +124,35 @@ async function revokeSession(userId, deviceId) {
 // Before writing a new session slot, check whether this device already has an active
 // session. If it does, this is a rotation — no new slot, no limit check. If it doesn't,
 // we're opening a new slot: evict the oldest active session when at the cap.
+// Uses a single $facet aggregation to answer both questions in one round-trip.
 async function enforceSessionLimit(userId, deviceId) {
-  const now    = new Date();
-  const col    = getCollection(SessionModel.collection);
+  const now     = new Date();
+  const col     = getCollection(SessionModel.collection);
   const ownerId = userId instanceof ObjectId ? userId : toObjectId(String(userId));
 
-  const existing = await col.findOne({
-    owner: ownerId, deviceId, isRevoked: false, expiresAt: { $gt: now },
-  });
-  if (existing) return;
+  const [result] = await col.aggregate([
+    { $match: { owner: ownerId, isRevoked: false, expiresAt: { $gt: now } } },
+    {
+      $facet: {
+        thisDevice: [
+          { $match:   { deviceId } },
+          { $limit:   1 },
+          { $project: { _id: 1 } },
+        ],
+        allActive: [
+          { $sort:    { createdAt: 1 } },
+          { $project: { _id: 1 } },
+        ],
+      },
+    },
+  ]).toArray();
 
-  const active = await col
-    .find({ owner: ownerId, isRevoked: false, expiresAt: { $gt: now } }, { projection: { _id: 1 } })
-    .sort({ createdAt: 1 })
-    .toArray();
+  if (result.thisDevice.length > 0) return;
 
-  if (active.length >= MAX_SESSIONS) {
-    logger.info('session limit reached, evicting oldest session', { uid: String(userId), evicting: String(active[0]._id) });
-    await col.deleteOne({ _id: active[0]._id });
+  if (result.allActive.length >= MAX_SESSIONS) {
+    const oldest = result.allActive[0];
+    logger.info('session limit reached, evicting oldest session', { uid: String(userId), evicting: String(oldest._id) });
+    await col.deleteOne({ _id: oldest._id });
   }
 }
 
