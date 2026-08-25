@@ -859,7 +859,221 @@ erDiagram
 
 ---
 
-## Indexes
+## Module HLD
+
+Each diagram shows the complete internal flow of a module and annotates every security control, validation gate, and performance decision directly on the relevant step.
+
+---
+
+### Auth Module
+
+```mermaid
+flowchart TD
+    subgraph SIGNUP["POST /api/auth/signup"]
+        S1["readJsonBody\n64 KB body limit"] --> S2
+        S2["sanitizeBody\ntrim whitespace, strip unknown keys"] --> S3
+        S3["validate SCHEMAS.signup\nusername: plain or email regex ReDoS-safe\nmaxLength 254, password maxLength 128"] --> S4
+        S4["hashPassword\nscrypt: memory-hard KDF\n16-byte random salt, 64-byte output"] --> S5
+        S5["insertDoc UserModel\nvalidateDoc enforces types + defaults"] --> S6
+        S6{"MongoServerError 11000?"} -- yes --> S7["AppError 409 Username taken"]
+        S6 -- no --> S8["Return user id role scopes"]
+    end
+
+    subgraph LOGIN["POST /api/auth/login"]
+        L1["readJsonBody + sanitizeBody + validate"] --> L2
+        L2["findOne username isDeleted=false\nprojection includes password field"] --> L3
+        L3["verifyPassword\nscrypt re-derive + timingSafeEqual\nconstant-time compare prevents timing attack"] --> L4
+        L4{"valid?"} -- no --> L5["AppError 401\nsame message for wrong user or wrong password\nprevents username enumeration"]
+        L4 -- yes --> L6
+        L6["enforceSessionLimit\nsingle dollar-facet aggregation\ncheck device + list all active in one round-trip"] --> L7
+        L7["signToken x3\nHMAC-SHA256 base64url\ncookie + access 15min + refresh 7d"] --> L8
+        L8["findOneAndUpdate sessions\nupsert: true\ntokenHash = SHA-256 of refresh token\nonly hash stored, never raw token"] --> L9
+        L9["Set-Cookie __Host-session\nHttpOnly Secure SameSite=Strict Path=/\n__Host- prefix forces Secure + no subdomain scope"]
+    end
+
+    subgraph REFRESH["POST /api/auth/refresh"]
+        R1["verifyToken\nHMAC-SHA256 verify + exp claim check"] --> R2
+        R2["findOne session owner+deviceId\nchecks isRevoked and expiresAt"] --> R3
+        R3["compare SHA-256 of incoming token\nvs stored tokenHash\ntimingSafeEqual inside signToken"] --> R4
+        R4{"hash match?"} -- no --> R5["updateMany isRevoked=true\nall sessions for user revoked\nbreach response — reuse detected"]
+        R4 -- yes --> R6["issue new access + refresh pair\nold refresh immediately invalid after this point"]
+    end
+
+    subgraph LOGOUT["POST /api/auth/logout"]
+        O1["requireAuth\nBearer or cookie verified"] --> O2
+        O2["revokeSession\nDB session isRevoked=true\nimmediate invalidation"] --> O3
+        O3["Set-Cookie Max-Age=0\nclears cookie on browser regardless of path used"]
+    end
+```
+
+---
+
+### File Module
+
+```mermaid
+flowchart TD
+    subgraph UPLOAD["POST /api/files  multipart/form-data"]
+        U1["requireAuth + requireScope file:write"] --> U2
+        U2["Busboy multipart parser\nfileSize limit from MAX_FILE_SIZE_BYTES\nfiles limit from MAX_FILES_PER_UPLOAD"] --> U3
+        U3["field event: parse meta JSON\nvalidate SCHEMAS.fileMeta\nmimeType enum: text/plain or application/json"] --> U4
+        U4["file event: assertSafePath\npath.resolve collapses dot-dot\nstartsWith storageDir + sep"] --> U5
+        U5["first chunk: looksLikeText\nbyte-by-byte UTF-8 inspection\nrejects null bytes C0 controls lone high bytes"] --> U6
+        U6{"content valid?"} -- no --> U7["failFile 415\nunpipe + resume + destroy + unlink\nbusboy parser not stalled"]
+        U6 -- yes --> U8
+        U8["createEncryptStream\nAES-256-GCM randomBytes 12 IV\ncipher is Node Transform stream\nfileStream pipe cipher pipe dest"] --> U9
+        U9["dest finish: insertDoc FileModel\nvalidateDoc: owner as ObjectId\niv and authTag as Buffer"] --> U10
+        U10["best-effort results array\n201 all ok / 207 partial / 400 all failed"]
+    end
+
+    subgraph LIST["GET /api/files  paginated"]
+        G1["requireAuth + requireScope file:read"] --> G2
+        G2["parsePagination\npage + limit clamped to MAX_PAGE_SIZE\nno unbounded toArray"] --> G3
+        G3{"role?"} -- admin --> G4["match isDeleted=false"]
+        G3 -- manager/viewer --> G5["distinct active share file IDs\nthen OR owner + sharedIds"]
+        G4 --> G6
+        G5 --> G6
+        G6["aggregate pipeline\ndollar-match dollar-sort dollar-skip dollar-limit\ndollar-lookup sharetokens per file\ndollar-limit 1 inside lookup — no full scan\nexclusion projection strips iv authTag storageName"] --> G7
+        G7["Promise.all fetch + countDocuments\nparallel queries"] --> G8
+        G8["attachShareUrls\nHMAC-SHA256 re-sign per file\ndeterministic: same payload + secret = same token"]
+    end
+
+    subgraph GETONE["GET /api/files/:fileId"]
+        N1["requireAuth + requireScope file:read"] --> N2
+        N2["toObjectId — throws AppError 400 on bad format"] --> N3
+        N3["fetchFilesWithShare single item\ndollar-lookup inline — no global scan"] --> N4
+        N4{"role admin?"} -- no --> N5["check owner OR activeShare\n404 if neither — prevents existence leak"]
+        N4 -- yes --> N6["return file + shareUrl if share exists"]
+        N5 --> N6
+    end
+
+    subgraph DELETE["DELETE /api/files/:fileId"]
+        D1["requireAuth + requireScope file:delete"] --> D2
+        D2["findOne owner=req.user.uid\nowner-only check — admin has no file:delete scope"] --> D3
+        D3["updateOne isDeleted=true\nsoft delete — blob kept on disk encrypted"] --> D4
+        D4["updateMany sharetokens revoked=true\ncascade revoke all share links for this file"]
+    end
+```
+
+---
+
+### Share Module
+
+```mermaid
+flowchart TD
+    subgraph CREATE["POST /api/files/:fileId/share"]
+        C1["requireAuth + requireScope file:write"] --> C2
+        C2["validate SCHEMAS.shareCreate\nexpiresInSeconds min/max from env\nSHARE_TOKEN_MIN_EXPIRY SHARE_TOKEN_MAX_EXPIRY"] --> C3
+        C3["findOne file owner=uid isDeleted=false\nowner-only creation — admin cannot share others files"] --> C4
+        C4["randomUUID tokenId\nnever predictable — CSPRNG"] --> C5
+        C5["insertDoc ShareModel\ntokenId unique index prevents duplicates"] --> C6
+        C6["signToken HMAC-SHA256\npayload: fileId + tokenId + exp"] --> C7
+        C7["return token + tokenId + shareUrl\nclient stores tokenId for future revocation"]
+    end
+
+    subgraph LIST_TOKENS["GET /api/files/:fileId/share"]
+        LT1["requireAuth + requireScope file:read"] --> LT2
+        LT2{"role admin?"} -- yes --> LT3["any file"]
+        LT2 -- no --> LT4["owner check"]
+        LT3 --> LT5
+        LT4 --> LT5
+        LT5["parsePagination — bounded query\nfilter revoked=false expiresAt gt now\ncompound index file+revoked+expiresAt used\nreturns tokenId expiresAt createdAt only\nsigned token never returned in list"] --> LT6
+        LT6["Promise.all find + countDocuments"]
+    end
+
+    subgraph REVOKE["DELETE /api/files/:fileId/share/:tokenId"]
+        RV1["requireAuth + requireScope file:delete"] --> RV2
+        RV2{"role admin?"} -- yes --> RV3["any file ownership skip"]
+        RV2 -- no --> RV4["findOne file owner=uid check"]
+        RV3 --> RV5
+        RV4 --> RV5
+        RV5["updateOne sharetokens revoked=true\n404 if tokenId not found for this file"]
+    end
+
+    subgraph DOWNLOAD["GET /api/share/:token  public no auth"]
+        DL1["verifyToken\nHMAC-SHA256 + exp claim\nrejects tampered or expired tokens"] --> DL2
+        DL2["findOne sharetokens tokenId\nunique index O(1) lookup\ncheck revoked=false + expiresAt gt now"] --> DL3
+        DL3["findOne files isDeleted=false\ndeleted files not accessible even with valid token"] --> DL4
+        DL4["createDecryptStream\ntoBuf: BSON Binary to Node Buffer\nAES-256-GCM setAuthTag\ngcm auth tag validates ciphertext integrity"] --> DL5
+        DL5["pipe readStream pipe decipher pipe res\ntrackStream for graceful shutdown\nContent-Disposition attachment filename encoded"]
+    end
+```
+
+---
+
+### User Module
+
+```mermaid
+flowchart TD
+    subgraph USER_LIST["GET /api/users"]
+        UL1["requireAuth + requireRole admin\nstrict role check not scope"] --> UL2
+        UL2["parsePagination — MAX_PAGE_SIZE cap\nno unbounded toArray"] --> UL3
+        UL3["find isDeleted=false\nprojection password=0\nnever leaks password hash"] --> UL4
+        UL4["Promise.all find + countDocuments\nparallel — single round-trip cost"]
+    end
+
+    subgraph USER_CREATE["POST /api/users"]
+        UC1["requireAuth + requireRole admin"] --> UC2
+        UC2["sanitizeBody + validate SCHEMAS.createUser\nusername: plain or email regex\nmaxLength 254"] --> UC3
+        UC3["hashPassword scrypt\nruns before insert — no plain text ever written"] --> UC4
+        UC4["insertDoc UserModel"] --> UC5
+        UC5{"MongoServerError 11000?"} -- yes --> UC6["AppError 409\nrace-condition safe — index is the authority"]
+        UC5 -- no --> UC7["return id username role\npassword never in response"]
+    end
+
+    subgraph USER_UPDATE["PATCH /api/users/:id"]
+        UU1["requireAuth + requireRole admin"] --> UU2
+        UU2["sanitizeBody + validate SCHEMAS.updateUser\nall fields optional"] --> UU3
+        UU3["build partial updates object\nonly provided fields updated"] --> UU4
+        UU4["hashPassword if password in body"] --> UU5
+        UU5["updateOne + prepareSet\nupdatedAt stamped automatically"] --> UU6
+        UU6{"MongoServerError 11000?"} -- yes --> UU7["AppError 409 username taken"]
+        UU6 -- no --> UU8["200 updated"]
+    end
+
+    subgraph USER_DELETE["DELETE /api/users/:id"]
+        UD1["requireAuth + requireRole admin"] --> UD2
+        UD2["updateOne isDeleted=true\nsoft delete — audit trail preserved"] --> UD3
+        UD3["updateMany sessions isRevoked=true\nimmediate session revocation\ndeleted user kicked out of all devices"]
+    end
+```
+
+---
+
+### Shared Infrastructure
+
+```mermaid
+flowchart TD
+    subgraph DB["lib/db.js — MongoDB connection layer"]
+        DB1["MongoClient connection pool\nmaxPoolSize 10 minPoolSize 2\nserverSelectionTimeout 5s socketTimeout 30s"] --> DB2
+        DB2["ensureIndexes on connect\nunique indexes prevent duplicates\ncompound indexes serve query shapes\nTTL indexes auto-delete expired sessions and tokens"] --> DB3
+        DB3["insertDoc: validateDoc then insertOne\ngetCollection: direct collection reference\ntoObjectId: AppError 400 on bad format\nprepareSet: adds updatedAt automatically"]
+    end
+
+    subgraph CRYPTO["lib/crypto/"]
+        CR1["fileCrypto.js\nAES-256-GCM Node Transform stream\n12-byte random IV per file\n16-byte auth tag stored in DB\nintegrity check on decrypt"]
+        CR2["password.js\nscrypt KDF: CPU + memory hard\n16-byte random salt per user\n64-byte output key\ntimingSafeEqual on verify"]
+        CR3["tokens.js\nHMAC-SHA256 base64url\npayload.data . sig format\ntimingSafeEqual on verify\nexp claim checked on every verify"]
+    end
+
+    subgraph VALIDATION["lib/validation/"]
+        V1["schemas.js\nHTTP body: validate required type maxLength enum min max\nDB doc: validateDoc types defaults ObjectId coercion\nprepareSet wraps updates in dollar-set"]
+        V2["sanitize.js\nassertSafePath: path.resolve + startsWith base+sep\nsanitizeMongoQuery: strips dollar-prefix and dot keys\nvalidateUsername: plain regex OR email RFC 5321 regex\nboth ReDoS-safe fixed character classes"]
+    end
+
+    subgraph LOGGER["lib/logger.js"]
+        LG1["Structured JSON output\nts level msg + context fields\nERROR to stderr all others to stdout\nlog level from LOG_LEVEL env or NODE_ENV default\nno external dependencies"]
+    end
+
+    subgraph MIDDLEWARE["middleware/"]
+        MW1["session.js requireAuth\nBearer header checked first\ncookie fallback for browsers\nverifyToken on both paths"]
+        MW2["rbac.js\nrequireRole: exact role match\nrequireScope: ABAC from token scopes\ndefaults to getScopesForRole if scopes missing"]
+        MW3["errorHandler.js\nAppError operational: logger.warn + safe message to client\nunexpected: logger.error + stack hidden + Internal server error\nrequestId on every error response"]
+    end
+```
+
+---
+
+
 
 Every query-hot field has an index created automatically at startup via `ensureIndexes()` in `lib/db.js`.
 
